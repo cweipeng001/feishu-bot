@@ -363,9 +363,18 @@ def feishu_callback():
             chat_id = message.get("chat_id")
             message_type = message.get("message_type")
             message_id = message.get("message_id")  # 添加message_id的获取
+            create_time = message.get("create_time")  # 消息创建时间（毫秒）
             content = json.loads(message.get("content", "{}"))
-            # 修复sender_id获取方式 - 使用chat_id作为用户标识（私聊场景）
+            # 修夏sender_id获取方式 - 使用chat_id作为用户标识（私聊场景）
             sender_id = sender.get("sender_id", {}).get("user_id") or chat_id
+                        
+            # ✅ 关键检查：只处理最近 2 分钟内的消息（防止重启后处理旧消息）
+            if create_time:
+                current_time = int(time.time() * 1000)  # 当前时间（毫秒）
+                message_age = (current_time - int(create_time)) / 1000  # 消息年龄（秒）
+                if message_age > 120:  # 2 分钟 = 120 秒
+                    logger.warning(f"⚠️ 消息过旧（{message_age:.0f}秒前），忽略处理")
+                    return jsonify({"code": 0, "msg": "success"})
             
             # ⚠️ 重要：按message_id也进行去重（防止旧消息的重复）
             if message_id and message_id in processed_messages:
