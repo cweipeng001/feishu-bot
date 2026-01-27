@@ -238,7 +238,7 @@ def get_qoder_reply(user_message, user_id=None, chat_id=None, history=None):
             qoder_endpoint,
             headers=headers,
             json=data,
-            timeout=30
+            timeout=10
         )
         response.raise_for_status()
         result = response.json()
