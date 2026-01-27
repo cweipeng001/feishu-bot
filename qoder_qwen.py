@@ -57,7 +57,7 @@ def call_qwen_api(message, history=None, retry_count=0):
             "messages": messages,
             "temperature": 0.7,
             "top_p": 0.95,
-            "max_tokens": 1024
+            "max_tokens": 2048  # 增加至 2048，支持更长的回复
         }
         
         headers = {
@@ -68,11 +68,12 @@ def call_qwen_api(message, history=None, retry_count=0):
         logger.info(f"调用千问API - 模型: {QWEN_MODEL}, 消息数: {len(messages)}, 重试: {retry_count}")
         
         # 发送请求（禁用SSL验证）
+        # 超时时间改为 60 秒，心流平台千问 API 响应较慢
         response = requests.post(
             QWEN_API_URL, 
             json=payload, 
             headers=headers, 
-            timeout=30,
+            timeout=60,
             verify=False
         )
         response.raise_for_status()
