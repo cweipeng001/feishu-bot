@@ -10,6 +10,7 @@ import time
 from dotenv import load_dotenv
 from collections import defaultdict
 from datetime import datetime
+from threading import Thread  # 用于异步处理
 
 # 加载环境变量
 load_dotenv()
@@ -102,6 +103,31 @@ def format_history_for_qoder(history):
             "content": msg.get("content", "")
         })
     return formatted
+
+# 异步处理消息（关键修复：防止飞书重试）
+def process_message_async(chat_id, sender_id, user_text):
+    """在后台线程中处理消息"""
+    try:
+        # 添加到对话历史
+        add_to_history(sender_id, user_text, "user")
+        
+        # 获取对话历史
+        history = get_conversation_history(sender_id, limit=5)
+        # ✅ 格式化历史用于Qoder API
+        formatted_history = format_history_for_qoder(history)
+        
+        # 调用Qoder智能体获取回复
+        logger.info(f"用户消息：{user_text}")
+        qoder_reply = get_qoder_reply(user_text, sender_id, chat_id, formatted_history)
+        logger.info(f"Qoder回复：{qoder_reply}")
+        
+        # 添加回复到历史
+        add_to_history(sender_id, qoder_reply, "assistant")
+        
+        # 发送回复到飞书
+        send_feishu_text_message(chat_id, qoder_reply)
+    except Exception as e:
+        logger.error(f"异步处理消息失败：{e}", exc_info=True)
 
 # 1. 获取飞书机器人访问令牌（带缓存）
 _feishu_token_cache = {"token": None, "expire_time": 0}
@@ -368,24 +394,11 @@ def feishu_callback():
                 user_text = content.get("text", "").strip()
                 
                 if user_text:
-                    # 添加到对话历史
-                    add_to_history(sender_id, user_text, "user")
-                    
-                    # 获取对话历史
-                    history = get_conversation_history(sender_id, limit=5)
-                    # ✅ 格式化历史用于Qoder API
-                    formatted_history = format_history_for_qoder(history)
-                    
-                    # 调用Qoder智能体获取回复
-                    logger.info(f"用户消息：{user_text}")
-                    qoder_reply = get_qoder_reply(user_text, sender_id, chat_id, formatted_history)
-                    logger.info(f"Qoder回复：{qoder_reply}")
-                    
-                    # 添加回复到历史
-                    add_to_history(sender_id, qoder_reply, "assistant")
-                    
-                    # 发送回复到飞书
-                    send_feishu_text_message(chat_id, qoder_reply)
+                    # ✅ 关键修复：启动后台线程处理，立即返回响应
+                    thread = Thread(target=process_message_async, args=(chat_id, sender_id, user_text))
+                    thread.daemon = True  # 守护线程，主程序退出时自动结束
+                    thread.start()
+                    logger.info(f"✅ 已启动异步处理线程，立即返回飞书")
             
             elif message_type == "image":
                 # 处理图片消息
