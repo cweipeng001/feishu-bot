@@ -47,12 +47,10 @@ def main():
     qoder_env = os.environ.copy()
     qoder_process = subprocess.Popen(
         [sys.executable, "qoder_qwen.py"],
-        env=qoder_env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT
+        env=qoder_env
     )
     processes.append(qoder_process)
-    print(f"✅ Qoder 服务启动成功 (PID: {qoder_process.pid})")
+    print(f"✅ Qoder 服务启动成功 (PID: {qoder_process.pid})") 
     
     # 等待 Qoder 启动
     time.sleep(3)
