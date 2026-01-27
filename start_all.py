@@ -55,10 +55,27 @@ def main():
         universal_newlines=True  # 输出为字符串
     )
     processes.append(qoder_process)
-    print(f"✅ Qoder 服务启动成功 (PID: {qoder_process.pid})") 
-    
-    # 等待 Qoder 启动
-    time.sleep(3)
+    print(f"✅ Qoder 服务启动成功 (PID: {qoder_process.pid})")
+        
+    # 等待 Qoder 启动并检查健康状态
+    print("\n⏳ 等待 Qoder 服务就绪...")
+    time.sleep(5)  # 给 Qoder 足够的启动时间
+        
+    # 尝试检查 Qoder 健康状态
+    import requests
+    max_retries = 10
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(f"http://127.0.0.1:{qoder_port}/health", timeout=2)
+            if response.status_code == 200:
+                print("✅ Qoder 服务已就绪，可以开始处理请求")
+                break
+        except:
+            if attempt < max_retries - 1:
+                print(f"  ⏳ Qoder 未就绪，等待中... ({attempt + 1}/{max_retries})")
+                time.sleep(1)
+            else:
+                print("  ⚠️  Qoder 启动超时，继续启动飞书机器人（可能会降级到简单模式）")
     
     # 启动飞书机器人（前台，使用 gunicorn）
     print("\n📱 启动飞书机器人...")
