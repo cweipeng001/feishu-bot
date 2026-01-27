@@ -92,6 +92,17 @@ def get_conversation_history(user_id, limit=5):
         return conversation_history[user_id][-limit:]
     return []
 
+# 辅助函数：格式化对话历史用于Qoder API
+def format_history_for_qoder(history):
+    """将对话历史格式化为Qoder API期望的格式"""
+    formatted = []
+    for msg in history:
+        formatted.append({
+            "role": msg.get("role", "user"),
+            "content": msg.get("content", "")
+        })
+    return formatted
+
 # 1. 获取飞书机器人访问令牌（带缓存）
 _feishu_token_cache = {"token": None, "expire_time": 0}
 
@@ -362,10 +373,12 @@ def feishu_callback():
                     
                     # 获取对话历史
                     history = get_conversation_history(sender_id, limit=5)
+                    # ✅ 格式化历史用于Qoder API
+                    formatted_history = format_history_for_qoder(history)
                     
                     # 调用Qoder智能体获取回复
                     logger.info(f"用户消息：{user_text}")
-                    qoder_reply = get_qoder_reply(user_text, sender_id, chat_id, history)
+                    qoder_reply = get_qoder_reply(user_text, sender_id, chat_id, formatted_history)
                     logger.info(f"Qoder回复：{qoder_reply}")
                     
                     # 添加回复到历史
