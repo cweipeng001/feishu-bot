@@ -1,0 +1,486 @@
+import requests
+import json
+import hashlib
+import hmac
+import base64
+from flask import Flask, request, jsonify
+import logging
+import os
+import time
+from dotenv import load_dotenv
+from collections import defaultdict
+from datetime import datetime
+
+# 加载环境变量
+load_dotenv()
+
+app = Flask(__name__)
+
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# 飞书机器人核心配置（从环境变量读取）
+FEISHU_CONFIG = {
+    "app_id": os.getenv("FEISHU_APP_ID"),
+    "app_secret": os.getenv("FEISHU_APP_SECRET"),
+    "verification_token": os.getenv("FEISHU_VERIFICATION_TOKEN"),
+    "encrypt_key": os.getenv("FEISHU_ENCRYPT_KEY", "")
+}
+
+# Qoder智能体配置（从环境变量读取）
+QODER_CONFIG = {
+    "api_endpoint": os.getenv("QODER_API_ENDPOINT", "http://127.0.0.1:8081/api/chat"),  # 默认本地Qoder
+    "api_key": os.getenv("QODER_API_KEY", "")
+}
+
+# 千问AI配置（作为备用，当Qoder不可用时使用）
+QWEN_CONFIG = {
+    "api_key": os.getenv("QWEN_API_KEY", ""),
+    "model": os.getenv("QWEN_MODEL", "qwen3-vl-plus"),
+    "api_url": "https://apis.iflow.cn/v1/chat/completions"
+}
+
+# 对话历史记录（简单的内存存储）
+conversation_history = defaultdict(list)
+MAX_HISTORY_LENGTH = 10  # 每个用户保留最后10条对话
+
+# 事件去重机制（防止飞书发送的重复事件）
+processed_events = set()
+processed_messages = set()  # 按照message_id去重，确保同一条消息只处理一次
+MAX_PROCESSED_EVENTS = 1000  # 最多记录1000个事件ID
+
+# 用户白名单（空则允许所有用户）
+ALLOWED_USERS = set(os.getenv("ALLOWED_USERS", "").split(",")) if os.getenv("ALLOWED_USERS") else None
+
+# 辅助函数：检查事件是否已经处理过（防止重复事件）
+def is_event_processed(event_id):
+    """检查事件是否已经处理"""
+    return event_id in processed_events
+
+def mark_event_processed(event_id):
+    """标记事件为已处理"""
+    processed_events.add(event_id)
+    # 控制内存大小不超过上限
+    if len(processed_events) > MAX_PROCESSED_EVENTS:
+        pass
+
+# 辅助函数：检查用户权限
+def check_user_permission(user_id):
+    """检查用户是否有权限使用机器人"""
+    if ALLOWED_USERS is None:
+        return True  # 没有配置白名单，允许所有用户
+    return user_id in ALLOWED_USERS
+
+# 辅助函数：添加对话历史
+def add_to_history(user_id, message, role="user"):
+    """添加消息到对话历史"""
+    if user_id:
+        conversation_history[user_id].append({
+            "role": role,
+            "content": message,
+            "timestamp": datetime.now().isoformat()
+        })
+        # 保持历史记录在限制范围内
+        if len(conversation_history[user_id]) > MAX_HISTORY_LENGTH:
+            conversation_history[user_id] = conversation_history[user_id][-MAX_HISTORY_LENGTH:]
+
+# 辅助函数：获取对话历史
+def get_conversation_history(user_id, limit=5):
+    """获取用户的对话历史"""
+    if user_id and user_id in conversation_history:
+        return conversation_history[user_id][-limit:]
+    return []
+
+# 1. 获取飞书机器人访问令牌（带缓存）
+_feishu_token_cache = {"token": None, "expire_time": 0}
+
+def get_feishu_token():
+    """获取飞书访问令牌，包含缓存机制"""
+    # 检查缓存是否有效
+    if _feishu_token_cache["token"] and _feishu_token_cache["expire_time"] > time.time():
+        return _feishu_token_cache["token"]
+    
+    url = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"
+    data = {
+        "app_id": FEISHU_CONFIG["app_id"],
+        "app_secret": FEISHU_CONFIG["app_secret"]
+    }
+    try:
+        response = requests.post(url, json=data, timeout=10)
+        response.raise_for_status()
+        token_data = response.json()
+        
+        if token_data.get("code") == 0:
+            # 缓存token（提前5分钟过期）
+            _feishu_token_cache["token"] = token_data["app_access_token"]
+            _feishu_token_cache["expire_time"] = time.time() + token_data.get("expire", 7200) - 300
+            logger.info("成功获取飞书Token")
+            return token_data["app_access_token"]
+        else:
+            logger.error(f"获取飞书Token失败：{token_data}")
+            return None
+    except Exception as e:
+        logger.error(f"获取飞书Token异常：{e}")
+        return None
+
+# 2. 发送飞书文本消息
+def send_feishu_text_message(chat_id, text_content, msg_type="text"):
+    """发送飞书消息（文本/富文本/卡片）"""
+    token = get_feishu_token()
+    if not token:
+        return False
+    
+    url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    # 构造消息内容
+    if msg_type == "text":
+        content = json.dumps({"text": text_content})
+    elif msg_type == "interactive":  # 卡片消息
+        content = json.dumps(text_content)
+    else:
+        content = json.dumps({"text": text_content})
+    
+    data = {
+        "receive_id": chat_id,
+        "content": content,
+        "msg_type": msg_type
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        response.raise_for_status()
+        result = response.json()
+        
+        if result.get("code") == 0:
+            logger.info(f"成功发送消息到 {chat_id}")
+            return True
+        else:
+            logger.error(f"发送消息失败：{result}")
+            return False
+    except Exception as e:
+        logger.error(f"发送消息异常：{e}")
+        return False
+
+# 3. 发送飞书交互卡片
+def send_feishu_card_message(chat_id, card_content):
+    """发送飞书交互卡片"""
+    token = get_feishu_token()
+    if not token:
+        return False
+    
+    url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "receive_id": chat_id,
+        "content": json.dumps(card_content),
+        "msg_type": "interactive"
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        response.raise_for_status()
+        result = response.json()
+        
+        if result.get("code") == 0:
+            logger.info(f"成功发送卡片到 {chat_id}")
+            return True
+        else:
+            logger.error(f"发送卡片失败：{result}")
+            return False
+    except Exception as e:
+        logger.error(f"发送卡片异常：{e}")
+        return False
+
+# 4. 调用Qoder智能体获取回复
+def get_qoder_reply(user_message, user_id=None, chat_id=None, history=None):
+    """调用Qoder智能体API获取回复（带自动Fallback）"""
+    
+    # 检查是否配置了有效的Qoder端点
+    qoder_endpoint = QODER_CONFIG.get("api_endpoint")
+    
+    # 如果没有配置端点，使用简单模式
+    if not qoder_endpoint:
+        logger.info("Qoder未配置，使用本地回复模式")
+        return get_simple_reply(user_message)
+    
+    # 尝试调用Qoder API（包括本地服务）
+    try:
+        headers = {
+            "Content-Type": "application/json"
+        }
+        
+        # 如果配置了API Key，添加到headers
+        if QODER_CONFIG.get('api_key'):
+            headers["Authorization"] = f"Bearer {QODER_CONFIG['api_key']}"
+        
+        data = {
+            "message": user_message,
+            "user_id": user_id,
+            "chat_id": chat_id,
+            "history": history or [],  # 传递对话历史
+            "context": {
+                "platform": "feishu",
+                "source": "feishu_bot"
+            }
+        }
+        
+        logger.info(f"调用Qoder API: {qoder_endpoint}")
+        response = requests.post(
+            qoder_endpoint,
+            headers=headers,
+            json=data,
+            timeout=30
+        )
+        response.raise_for_status()
+        result = response.json()
+        
+        # 根据您的Qoder API响应格式调整
+        reply = result.get("reply") or result.get("response") or result.get("answer")
+        if reply:
+            logger.info(f"✅ Qoder API返回成功")
+            return reply
+        else:
+            logger.warning(f"Qoder API返回格式异常: {result}")
+            return get_simple_reply(user_message)
+            
+    except requests.exceptions.ConnectionError as e:
+        logger.error(f"⚠️  无法连接到Qoder服务: {qoder_endpoint}，自动降级到本地模式")
+        logger.error(f"连接错误详情: {str(e)[:100]}")
+        return get_simple_reply(user_message)
+    except requests.exceptions.Timeout as e:
+        logger.error(f"⚠️  Qoder服务超时，自动降级到本地模式")
+        return get_simple_reply(user_message)
+    except Exception as e:
+        logger.error(f"⚠️  调用Qoder智能体失败: {e}，自动降级到本地模式")
+        return get_simple_reply(user_message)
+
+def get_simple_reply(user_message):
+    """简单的回复逻辑（当Qoder不可用时）"""
+    # 基础的关键词回复
+    message_lower = user_message.lower().strip()
+    
+    if any(word in message_lower for word in ['你好', 'hello', 'hi', '您好']):
+        return "你好！我是飞书机器人助手。\n\n目前我处于简单回复模式。要启用完整的AI功能，请配置Qoder智能体服务。\n\n您可以：\n1. 设置环境变量 QODER_API_ENDPOINT\n2. 重启机器人服务"
+    
+    elif any(word in message_lower for word in ['帮助', 'help', '功能']):
+        return "我是一个飞书机器人，可以：\n\n✅ 接收和回复消息\n✅ 支持AI智能对话（需配置Qoder）\n✅ 24小时在线服务\n\n当前状态：简单回复模式"
+    
+    elif any(word in message_lower for word in ['测试', 'test']):
+        return "✅ 测试成功！\n\n机器人运行正常，可以正常接收和发送消息。\n\n如需启用AI对话功能，请配置Qoder智能体。"
+    
+    else:
+        return f"收到您的消息：{user_message}\n\n我目前处于简单回复模式。要使用完整的AI对话功能，请联系管理员配置Qoder智能体服务。"
+
+# 5. 飞书事件回调接口
+@app.route("/feishu/callback", methods=["POST"])
+def feishu_callback():
+    """接收飞书事件回调"""
+    try:
+        # 获取请求数据
+        event_data = request.get_json()
+        
+        # 打印完整的请求数据用于调试
+        logger.info(f"收到飞书请求：{json.dumps(event_data, ensure_ascii=False)[:500]}")
+        
+        # 处理URL验证（飞书首次配置回调地址时会发送）
+        if event_data.get("type") == "url_verification":
+            challenge = event_data.get("challenge")
+            logger.info("收到飞书URL验证请求")
+            return jsonify({"challenge": challenge})
+        
+        # 验证Token（兼容新旧版本）
+        # 事件订阅 2.0 的 token 在 header 中
+        token_to_verify = event_data.get("token") or event_data.get("header", {}).get("token")
+        
+        if token_to_verify and token_to_verify != FEISHU_CONFIG["verification_token"]:
+            logger.warning(f"无效的verification_token: 收到={token_to_verify}, 期望={FEISHU_CONFIG['verification_token']}")
+            return jsonify({"code": 1, "msg": "invalid token"}), 401
+        
+        # 处理消息事件
+        if event_data.get("header", {}).get("event_type") == "im.message.receive_v1":
+            event_id = event_data.get("header", {}).get("event_id")
+                    
+            # ⚠️ 检查事件是否已处理过（防止重复处理）
+            if event_id and is_event_processed(event_id):
+                logger.warning(f"⚠️ 事件 {event_id} 已处理过，忽略重复事件")
+                return jsonify({"code": 0, "msg": "success"})
+                    
+            # 标记事件为已处理
+            if event_id:
+                mark_event_processed(event_id)
+                    
+            event = event_data.get("event", {})
+            message = event.get("message", {})
+            sender = event.get("sender", {})
+                    
+            # 获取消息内容
+            chat_id = message.get("chat_id")
+            message_type = message.get("message_type")
+            message_id = message.get("message_id")  # 添加message_id的获取
+            content = json.loads(message.get("content", "{}"))
+            # 修复sender_id获取方式 - 使用chat_id作为用户标识（私聊场景）
+            sender_id = sender.get("sender_id", {}).get("user_id") or chat_id
+            
+            # ⚠️ 重要：按message_id也进行去重（防止旧消息的重复）
+            if message_id and message_id in processed_messages:
+                logger.warning(f"⚠️ 消息 {message_id} 已处理过，忽略伜旧消息")
+                return jsonify({"code": 0, "msg": "success"})
+            
+            # 标记消息为已处理
+            if message_id:
+                processed_messages.add(message_id)
+            
+            logger.info(f"收到消息：chat_id={chat_id}, type={message_type}, sender={sender_id}")
+            
+            # ⚠️ 重要：立即返回200响应，防止飞书重试（这是导致重复的根本原因）
+            # 必须在处理消息之前返回，避免超时
+            response_obj = jsonify({"code": 0, "msg": "success"})
+            
+            # 检查用户权限
+            if sender_id and not check_user_permission(sender_id):
+                logger.warning(f"用户 {sender_id} 无权限使用机器人")
+                send_feishu_text_message(chat_id, "抱歉，您没有权限使用该机器人。请联系管理员添加权限。")
+                return response_obj
+            
+            # 处理不同类型的消息
+            if message_type == "text":
+                # 处理文本消息
+                user_text = content.get("text", "").strip()
+                
+                if user_text:
+                    # 添加到对话历史
+                    add_to_history(sender_id, user_text, "user")
+                    
+                    # 获取对话历史
+                    history = get_conversation_history(sender_id, limit=5)
+                    
+                    # 调用Qoder智能体获取回复
+                    logger.info(f"用户消息：{user_text}")
+                    qoder_reply = get_qoder_reply(user_text, sender_id, chat_id, history)
+                    logger.info(f"Qoder回复：{qoder_reply}")
+                    
+                    # 添加回复到历史
+                    add_to_history(sender_id, qoder_reply, "assistant")
+                    
+                    # 发送回复到飞书
+                    send_feishu_text_message(chat_id, qoder_reply)
+            
+            elif message_type == "image":
+                # 处理图片消息
+                image_key = content.get("image_key", "")
+                logger.info(f"收到图片消息: {image_key}")
+                send_feishu_text_message(chat_id, "🖼️ 我收到了您的图片，但目前还不支持图片分析功能。请用文字描述您的问题。")
+            
+            elif message_type == "file":
+                # 处理文件消息
+                file_key = content.get("file_key", "")
+                file_name = content.get("file_name", "未知文件")
+                logger.info(f"收到文件: {file_name} ({file_key})")
+                send_feishu_text_message(chat_id, f"📄 我收到了您的文件「{file_name}」，但目前还不支持文件分析功能。")
+            
+            elif message_type == "audio":
+                # 处理音频消息
+                logger.info("收到音频消息")
+                send_feishu_text_message(chat_id, "🎤 我收到了您的音频，但目前还不支持语音识别功能。请用文字输入。")
+            
+            else:
+                # 其他类型消息
+                logger.info(f"收到不支持的消息类型: {message_type}")
+                send_feishu_text_message(chat_id, f"收到您的{message_type}类型消息，但目前只支持文字消息。请用文字与我交流。")
+            
+            # 返回200响应
+            return response_obj
+        
+        # 飞书要求回调必须返回200和空JSON
+        return jsonify({"code": 0, "msg": "success"})
+    
+    except Exception as e:
+        logger.error(f"处理回调异常：{e}", exc_info=True)
+        return jsonify({"code": 1, "msg": str(e)}), 500
+
+# 6. 健康检查接口
+@app.route("/health", methods=["GET"])
+def health_check():
+    """健康检查接口"""
+    return jsonify({
+        "status": "ok",
+        "service": "feishu-qoder-bot",
+        "timestamp": int(time.time())
+    })
+
+# 7. 测试发送消息接口
+@app.route("/test/send", methods=["POST"])
+def test_send_message():
+    """测试发送消息接口"""
+    data = request.get_json()
+    chat_id = data.get("chat_id")
+    message = data.get("message", "测试消息")
+    
+    if not chat_id:
+        return jsonify({"error": "缺少chat_id参数"}), 400
+    
+    success = send_feishu_text_message(chat_id, message)
+    
+    if success:
+        return jsonify({"status": "success", "message": "发送成功"})
+    else:
+        return jsonify({"status": "error", "message": "发送失败"}), 500
+
+# 8. 查看对话历史
+@app.route("/history/<user_id>", methods=["GET"])
+def get_history(user_id):
+    """获取用户的对话历史"""
+    limit = request.args.get("limit", 10, type=int)
+    history = get_conversation_history(user_id, limit)
+    return jsonify({
+        "user_id": user_id,
+        "history_count": len(history),
+        "history": history
+    })
+
+# 9. 清空对话历史
+@app.route("/history/<user_id>", methods=["DELETE"])
+def clear_history(user_id):
+    """清空用户的对话历史"""
+    if user_id in conversation_history:
+        del conversation_history[user_id]
+        return jsonify({"status": "success", "message": f"已清空用户 {user_id} 的对话历史"})
+    else:
+        return jsonify({"status": "success", "message": "该用户没有对话历史"})
+
+# 10. 统计信息
+@app.route("/stats", methods=["GET"])
+def get_stats():
+    """获取系统统计信息"""
+    total_users = len(conversation_history)
+    total_messages = sum(len(history) for history in conversation_history.values())
+    
+    return jsonify({
+        "total_users": total_users,
+        "total_messages": total_messages,
+        "active_users": list(conversation_history.keys())[:10],  # 最近10个活跃用户
+        "qoder_endpoint": QODER_CONFIG.get("api_endpoint"),
+        "permissions_enabled": ALLOWED_USERS is not None,
+        "processed_events_count": len(processed_events)
+    })
+
+if __name__ == "__main__":
+    logger.info("=" * 50)
+    logger.info("飞书机器人服务启动中...")
+    logger.info("=" * 50)
+    
+    # 从环境变量获取端口
+    port = int(os.getenv("SERVER_PORT", "5004"))
+    logger.info(f"服务将在端口 {port} 启动")
+    
+    # 启动Flask应用
+    app.run(host="0.0.0.0", port=port, debug=False)
