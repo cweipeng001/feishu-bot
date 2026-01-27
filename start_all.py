@@ -45,9 +45,14 @@ def main():
     # 启动 Qoder 服务（后台）
     print("\n🤖 启动 Qoder 千问服务...")
     qoder_env = os.environ.copy()
+    # 最关键：流式齐输出，不使用 PIPE，这样可以实时看到 stdout 和 stderr
     qoder_process = subprocess.Popen(
         [sys.executable, "qoder_qwen.py"],
-        env=qoder_env
+        env=qoder_env,
+        # 不默认转向，流式齐输出，便实时看到错误
+        bufsize=1,  # 行罐冲
+        text=True,  # 文本模式
+        universal_newlines=True  # 输出为字符串
     )
     processes.append(qoder_process)
     print(f"✅ Qoder 服务启动成功 (PID: {qoder_process.pid})") 
