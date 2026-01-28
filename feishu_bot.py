@@ -241,41 +241,44 @@ def send_feishu_card_message(chat_id, card_content):
 
 # 3.5 获取飞书群聊历史消息（方案3核心功能）
 def get_feishu_chat_history(chat_id, limit=20):
-    """从飞书API获取群聊历史消息（修复版）"""
+    """从飞书API获取群聊历史消息（使用消息列表API）"""
     token = get_feishu_token()
     if not token:
         logger.error("无法获取Token，无法读取历史消息")
         return []
     
-    # ✅ 修复：使用正确的API端点（获取群消息API）
-    url = f"https://open.feishu.cn/open-apis/im/v1/messages"
+    # ✅ 修复：使用 im/v1/messages 的 list 方法（批量获取消息）
+    url = "https://open.feishu.cn/open-apis/im/v1/messages"
     params = {
         "container_id_type": "chat",
         "container_id": chat_id,
-        "page_size": limit,
-        "sort_type": "ByCreateTimeAsc"  # 按创建时间升序
+        "page_size": min(limit, 50),  # 飞书限制最多50条
     }
     headers = {
         "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json; charset=utf-8"
     }
     
     try:
         response = requests.get(url, headers=headers, params=params, timeout=10)
-        response.raise_for_status()
-        result = response.json()
+        result = response.json()  # 先解析JSON
         
+        # 打印详细错误信息用于调试
         if result.get("code") != 0:
+            logger.error(f"❌ 飞书API返回错误: code={result.get('code')}, msg={result.get('msg')}")
+            logger.error(f"请求URL: {url}")
+            logger.error(f"请求参数: {params}")
+            
             # ✅ 权限不足时降级：返回空历史，但不报错
-            error_msg = result.get("msg", "unknown")
-            if "permission" in error_msg.lower() or result.get("code") == 99991663:
-                logger.warning(f"⚠️  机器人缺少读取消息权限，将使用空上下文：{result}")
+            error_code = result.get("code")
+            if error_code in [99991663, 99991401, 99991400]:  # 权限相关错误码
+                logger.warning(f"⚠️  机器人缺少读取消息权限（code={error_code}），将使用空上下文")
                 return []  # 降级：返回空历史
             else:
-                logger.error(f"获取历史消息失败：{result}")
                 return []
         
         messages = result.get("data", {}).get("items", [])
+        logger.info(f"📥 飞书API返回 {len(messages)} 条原始消息")
         
         # 解析消息，提取对话历史
         history = []
@@ -307,13 +310,8 @@ def get_feishu_chat_history(chat_id, limit=20):
         return history
         
     except requests.exceptions.HTTPError as e:
-        # ✅ 权限不足时降级
-        if e.response.status_code == 400:
-            logger.warning(f"⚠️  飞书API调用失败（400），可能是权限不足，将使用空上下文")
-            return []
-        else:
-            logger.error(f"获取飞书历史消息异常：{e}")
-            return []
+        logger.error(f"❌ HTTP错误: {e.response.status_code} - {e.response.text[:200]}")
+        return []
     except Exception as e:
         logger.error(f"获取飞书历史消息异常：{e}")
         return []
