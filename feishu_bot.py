@@ -108,6 +108,9 @@ def format_history_for_qoder(history):
 def process_message_async(chat_id, sender_id, user_text, message_id=None):
     """在后台线程中处理消息"""
     try:
+        # ✅ 调试日志：打印message_id
+        logger.info(f"🔑 收到message_id: {message_id}")
+        
         # ✅ 方案3：从飞书API获取群聊历史（不使用内存）
         history = get_feishu_chat_history(chat_id, limit=20)
         logger.info(f"📊 从飞书获取到 {len(history)} 条对话历史（chat_id={chat_id}）")
@@ -123,6 +126,7 @@ def process_message_async(chat_id, sender_id, user_text, message_id=None):
         logger.info(f"Qoder回复：{qoder_reply}")
         
         # ✅ 关键修复：使用回复功能，而非普通发送
+        logger.info(f"📤 准备发送回复，reply_to_message_id={message_id}")
         send_feishu_text_message(chat_id, qoder_reply, reply_to_message_id=message_id)
     except Exception as e:
         logger.error(f"异步处理消息失败：{e}", exc_info=True)
@@ -189,6 +193,9 @@ def send_feishu_text_message(chat_id, text_content, msg_type="text", reply_to_me
     # ✅ 关键修复：添加回复功能
     if reply_to_message_id:
         data["reply_to_message_id"] = reply_to_message_id
+        logger.info(f"✅ 已添加回复功能: reply_to={reply_to_message_id}")
+    else:
+        logger.warning(f"⚠️  未提供message_id，将使用普通发送模式")
     
     try:
         response = requests.post(url, headers=headers, json=data, timeout=10)
