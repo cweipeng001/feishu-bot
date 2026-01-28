@@ -190,12 +190,15 @@ def send_feishu_text_message(chat_id, text_content, msg_type="text", reply_to_me
         "msg_type": msg_type
     }
     
-    # ✅ 关键修复：添加回复功能（飞书官方字段：reply_in_thread）
+    # ✅ 关键修复：使用飞书官方回复字段 reply_in_thread
     if reply_to_message_id:
         # 飞书官方文档：https://open.feishu.cn/document/server-docs/im-v1/message/create
-        # 回复指定消息需要使用 "uuid" 字段，并且不需要 reply_in_thread
-        data["uuid"] = reply_to_message_id
-        logger.info(f"✅ 已添加回复功能: uuid={reply_to_message_id}")
+        # 回复消息需要同时设置：
+        # 1. reply_in_thread = false（不创建话题，直接回复）
+        # 2. root_id = 被回复消息的message_id
+        data["reply_in_thread"] = False
+        data["root_id"] = reply_to_message_id
+        logger.info(f"✅ 已添加回复功能: root_id={reply_to_message_id}")
     else:
         logger.warning(f"⚠️  未提供message_id，将使用普通发送模式")
     
@@ -314,17 +317,14 @@ def get_feishu_chat_history(chat_id, limit=20):
                 elif not isinstance(sender, dict):
                     sender = {}
                 
+                # ✅ 关键修复：sender.id 通常直接是字符串，不需要再次json.loads
                 sender_id_obj = sender.get("id", {})
-                if isinstance(sender_id_obj, str) and sender_id_obj.strip():
-                    try:
-                        sender_id_obj = json.loads(sender_id_obj)
-                    except json.JSONDecodeError:
-                        logger.warning(f"[{idx+1}] sender.id解析失败: {sender_id_obj[:50]}")
-                        sender_id_obj = {}
-                elif not isinstance(sender_id_obj, dict):
-                    sender_id_obj = {}
-                
-                sender_id = sender_id_obj.get("open_id", "unknown")
+                if isinstance(sender_id_obj, str):  # 直接是字符串（最常见情况）
+                    sender_id = sender_id_obj
+                elif isinstance(sender_id_obj, dict):  # 是对象（嵌套格式）
+                    sender_id = sender_id_obj.get("open_id", "unknown")
+                else:
+                    sender_id = "unknown"
                 
                 # 只处理文本消息
                 if msg_type == "text":
