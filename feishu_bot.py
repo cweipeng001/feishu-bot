@@ -365,8 +365,16 @@ def feishu_callback():
             message_id = message.get("message_id")  # 添加message_id的获取
             create_time = message.get("create_time")  # 消息创建时间（毫秒）
             content = json.loads(message.get("content", "{}"))
-            # 修夏sender_id获取方式 - 使用chat_id作为用户标识（私聊场景）
-            sender_id = sender.get("sender_id", {}).get("user_id") or chat_id
+            
+            # ✅ 关键修复：正确获取用户ID（群聊场景优先使用 open_id）
+            sender_id_obj = sender.get("sender_id", {})
+            sender_id = (
+                sender_id_obj.get("open_id") or  # 群聊场景：优先使用 open_id
+                sender_id_obj.get("user_id") or  # 私聊场景：使用 user_id
+                chat_id  # 兜底：使用 chat_id
+            )
+            
+            logger.info(f"收到消息：chat_id={chat_id}, sender_id={sender_id}, type={message_type}")
                         
             # ✅ 关键检查：只处理最近 2 分钟内的消息（防止重启后处理旧消息）
             if create_time:
@@ -384,8 +392,6 @@ def feishu_callback():
             # 标记消息为已处理
             if message_id:
                 processed_messages.add(message_id)
-            
-            logger.info(f"收到消息：chat_id={chat_id}, type={message_type}, sender={sender_id}")
             
             # ⚠️ 重要：立即返回200响应，防止飞书重试（这是导致重复的根本原因）
             # 必须在处理消息之前返回，避免超时
