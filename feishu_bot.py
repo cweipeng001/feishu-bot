@@ -108,25 +108,19 @@ def format_history_for_qoder(history):
 def process_message_async(chat_id, sender_id, user_text):
     """在后台线程中处理消息"""
     try:
-        # ✅ 关键修复：先获取对话历史（不包含当前消息）
-        history = get_conversation_history(sender_id, limit=5)
-        logger.info(f"📊 获取到 {len(history)} 条对话历史（sender_id={sender_id}）")
+        # ✅ 方案3：从飞书API获取群聊历史（不再使用内存存储）
+        history = get_feishu_chat_history(chat_id, limit=10)
+        logger.info(f"📊 从飞书获取到 {len(history)} 条对话历史（chat_id={chat_id}）")
         
-        # 再添加当前用户消息到历史
-        add_to_history(sender_id, user_text, "user")
-        
-        # ✅ 格式化历史用于Qoder API
-        formatted_history = format_history_for_qoder(history)
+        # ✅ 格式化历史用于Qoder API（已经是正确格式，直接使用）
+        formatted_history = history  # 飞书API返回的格式已经是 {"role": ..., "content": ...}
         if formatted_history:
-            logger.info(f"✅ 格式化历史：{len(formatted_history)} 条 -> {formatted_history[:2]}...")  # 打印前2条
+            logger.info(f"✅ 格式化历史：{len(formatted_history)} 条 -> {formatted_history[-2:]}")  # 打印最后2条
         
         # 调用Qoder智能体获取回复
         logger.info(f"用户消息：{user_text}")
         qoder_reply = get_qoder_reply(user_text, sender_id, chat_id, formatted_history)
         logger.info(f"Qoder回复：{qoder_reply}")
-        
-        # 添加回复到历史
-        add_to_history(sender_id, qoder_reply, "assistant")
         
         # 发送回复到飞书
         send_feishu_text_message(chat_id, qoder_reply)
@@ -240,6 +234,65 @@ def send_feishu_card_message(chat_id, card_content):
     except Exception as e:
         logger.error(f"发送卡片异常：{e}")
         return False
+
+# 3.5 获取飞书群聊历史消息（方案3核心功能）
+def get_feishu_chat_history(chat_id, limit=10):
+    """从飞书API获取群聊历史消息"""
+    token = get_feishu_token()
+    if not token:
+        logger.error("无法获取Token，无法读取历史消息")
+        return []
+    
+    url = f"https://open.feishu.cn/open-apis/im/v1/messages?container_id_type=chat&container_id={chat_id}&page_size={limit}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        result = response.json()
+        
+        if result.get("code") != 0:
+            logger.error(f"获取历史消息失败：{result}")
+            return []
+        
+        messages = result.get("data", {}).get("items", [])
+        
+        # 解析消息，提取对话历史
+        history = []
+        for msg in reversed(messages):  # 反转，按时间顺序
+            msg_type = msg.get("msg_type")
+            sender = msg.get("sender", {})
+            sender_id = sender.get("id", {}).get("open_id", "unknown")
+            
+            # 只处理文本消息
+            if msg_type == "text":
+                try:
+                    content = json.loads(msg.get("body", {}).get("content", "{}"))
+                    text = content.get("text", "")
+                    
+                    if text:
+                        # 判断是用户还是机器人
+                        # 机器人的 sender_id 通常是 app_id
+                        is_bot = sender_id.startswith("cli_") or sender_id == FEISHU_CONFIG.get("app_id")
+                        role = "assistant" if is_bot else "user"
+                        
+                        history.append({
+                            "role": role,
+                            "content": text
+                        })
+                except Exception as e:
+                    logger.warning(f"解析消息失败：{e}")
+                    continue
+        
+        logger.info(f"✅ 从飞书获取到 {len(history)} 条历史消息")
+        return history
+        
+    except Exception as e:
+        logger.error(f"获取飞书历史消息异常：{e}")
+        return []
 
 # 4. 调用Qoder智能体获取回复
 def get_qoder_reply(user_message, user_id=None, chat_id=None, history=None):
