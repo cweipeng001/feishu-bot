@@ -293,35 +293,63 @@ def get_feishu_chat_history(chat_id, limit=20):
         messages = result.get("data", {}).get("items", [])
         logger.info(f"📥 飞书API返回 {len(messages)} 条原始消息")
         
+        # 🔍 调试：打印第一条消息的完整结构
+        if messages:
+            logger.info(f"🔍 第一条消息结构示例: {json.dumps(messages[0], ensure_ascii=False)[:500]}")
+        
         # 解析消息，提取对话历史
         history = []
         for idx, msg in enumerate(messages):
             try:
                 msg_type = msg.get("msg_type")
                 
-                # ✅ 修复：sender 也可能是字符串
+                # ✅ 修复：sender 可能是字符串、空字符串、或对象
                 sender = msg.get("sender", {})
-                if isinstance(sender, str):
-                    sender = json.loads(sender)
+                if isinstance(sender, str) and sender.strip():  # 检查非空字符串
+                    try:
+                        sender = json.loads(sender)
+                    except json.JSONDecodeError:
+                        logger.warning(f"[{idx+1}] sender解析失败: {sender[:50]}")
+                        sender = {}
+                elif not isinstance(sender, dict):
+                    sender = {}
                 
                 sender_id_obj = sender.get("id", {})
-                if isinstance(sender_id_obj, str):
-                    sender_id_obj = json.loads(sender_id_obj)
+                if isinstance(sender_id_obj, str) and sender_id_obj.strip():
+                    try:
+                        sender_id_obj = json.loads(sender_id_obj)
+                    except json.JSONDecodeError:
+                        logger.warning(f"[{idx+1}] sender.id解析失败: {sender_id_obj[:50]}")
+                        sender_id_obj = {}
+                elif not isinstance(sender_id_obj, dict):
+                    sender_id_obj = {}
                 
                 sender_id = sender_id_obj.get("open_id", "unknown")
                 
                 # 只处理文本消息
                 if msg_type == "text":
-                    # ✅ 修复：body 可能是字符串或对象
+                    # ✅ 修复：body 可能是字符串、空字符串、或对象
                     body = msg.get("body", {})
-                    if isinstance(body, str):
-                        body = json.loads(body)
+                    if isinstance(body, str) and body.strip():
+                        try:
+                            body = json.loads(body)
+                        except json.JSONDecodeError:
+                            logger.warning(f"[{idx+1}] body解析失败: {body[:50]}")
+                            body = {}
+                    elif not isinstance(body, dict):
+                        body = {}
                     
                     content_str = body.get("content", "{}")
-                    if isinstance(content_str, str):
-                        content = json.loads(content_str)
-                    else:
+                    if isinstance(content_str, str) and content_str.strip():
+                        try:
+                            content = json.loads(content_str)
+                        except json.JSONDecodeError:
+                            logger.warning(f"[{idx+1}] content解析失败: {content_str[:50]}")
+                            content = {}
+                    elif isinstance(content_str, dict):
                         content = content_str
+                    else:
+                        content = {}
                     
                     text = content.get("text", "")
                     
@@ -334,7 +362,7 @@ def get_feishu_chat_history(chat_id, limit=20):
                             "role": role,
                             "content": text
                         })
-                        logger.debug(f"✅ 解析成功 [{idx+1}/{len(messages)}]: role={role}, text={text[:30]}...")
+                        logger.info(f"✅ 解析成功 [{idx+1}/{len(messages)}]: role={role}, text={text[:30]}...")
             except Exception as e:
                 logger.warning(f"解析消息失败 [{idx+1}/{len(messages)}]：{e}，msg_id={msg.get('message_id', 'unknown')[:20]}")
                 continue
