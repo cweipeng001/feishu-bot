@@ -297,7 +297,17 @@ def get_feishu_chat_history(chat_id, limit=20):
             # 只处理文本消息
             if msg_type == "text":
                 try:
-                    content = json.loads(msg.get("body", {}).get("content", "{}"))
+                    # ✅ 修复：body 可能是字符串或对象
+                    body = msg.get("body", {})
+                    if isinstance(body, str):
+                        body = json.loads(body)
+                    
+                    content_str = body.get("content", "{}")
+                    if isinstance(content_str, str):
+                        content = json.loads(content_str)
+                    else:
+                        content = content_str
+                    
                     text = content.get("text", "")
                     
                     if text:
@@ -310,7 +320,7 @@ def get_feishu_chat_history(chat_id, limit=20):
                             "content": text
                         })
                 except Exception as e:
-                    logger.warning(f"解析消息失败：{e}")
+                    logger.warning(f"解析消息失败：{e}，msg={msg.get('message_id', 'unknown')[:20]}")
                     continue
         
         logger.info(f"✅ 从飞书获取到 {len(history)} 条历史消息")
