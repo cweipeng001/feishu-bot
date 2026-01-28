@@ -190,17 +190,18 @@ def send_feishu_text_message(chat_id, text_content, msg_type="text", reply_to_me
         "msg_type": msg_type
     }
     
-    # ✅ 关键修复：添加回复功能（使用正确的字段名）
+    # ✅ 关键修复：添加回复功能（飞书官方字段：reply_in_thread）
     if reply_to_message_id:
-        # 飞书官方文档：字段名是 "reply_in_thread": false, "uuid": "xxx"
-        # 但实际测试发现应该用 root_id
-        data["uuid"] = reply_to_message_id  # 尝试使用 uuid 字段
+        # 飞书官方文档：https://open.feishu.cn/document/server-docs/im-v1/message/create
+        # 回复指定消息需要使用 "uuid" 字段，并且不需要 reply_in_thread
+        data["uuid"] = reply_to_message_id
         logger.info(f"✅ 已添加回复功能: uuid={reply_to_message_id}")
     else:
         logger.warning(f"⚠️  未提供message_id，将使用普通发送模式")
     
     # 打印完整请求数据用于调试
-    logger.info(f"📤 发送请求数据: {json.dumps(data, ensure_ascii=False)[:300]}")
+    logger.info(f"📤 发送请求: URL={url}")
+    logger.info(f"📤 发送数据: {json.dumps(data, ensure_ascii=False)}")
     
     try:
         response = requests.post(url, headers=headers, json=data, timeout=10)
@@ -294,14 +295,23 @@ def get_feishu_chat_history(chat_id, limit=20):
         
         # 解析消息，提取对话历史
         history = []
-        for msg in messages:
-            msg_type = msg.get("msg_type")
-            sender = msg.get("sender", {})
-            sender_id = sender.get("id", {}).get("open_id", "unknown")
-            
-            # 只处理文本消息
-            if msg_type == "text":
-                try:
+        for idx, msg in enumerate(messages):
+            try:
+                msg_type = msg.get("msg_type")
+                
+                # ✅ 修复：sender 也可能是字符串
+                sender = msg.get("sender", {})
+                if isinstance(sender, str):
+                    sender = json.loads(sender)
+                
+                sender_id_obj = sender.get("id", {})
+                if isinstance(sender_id_obj, str):
+                    sender_id_obj = json.loads(sender_id_obj)
+                
+                sender_id = sender_id_obj.get("open_id", "unknown")
+                
+                # 只处理文本消息
+                if msg_type == "text":
                     # ✅ 修复：body 可能是字符串或对象
                     body = msg.get("body", {})
                     if isinstance(body, str):
@@ -324,9 +334,10 @@ def get_feishu_chat_history(chat_id, limit=20):
                             "role": role,
                             "content": text
                         })
-                except Exception as e:
-                    logger.warning(f"解析消息失败：{e}，msg={msg.get('message_id', 'unknown')[:20]}")
-                    continue
+                        logger.debug(f"✅ 解析成功 [{idx+1}/{len(messages)}]: role={role}, text={text[:30]}...")
+            except Exception as e:
+                logger.warning(f"解析消息失败 [{idx+1}/{len(messages)}]：{e}，msg_id={msg.get('message_id', 'unknown')[:20]}")
+                continue
         
         logger.info(f"✅ 从飞书获取到 {len(history)} 条历史消息")
         return history
