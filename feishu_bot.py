@@ -108,17 +108,17 @@ def format_history_for_qoder(history):
 def process_message_async(chat_id, sender_id, user_text):
     """在后台线程中处理消息"""
     try:
-        # 添加到对话历史
-        add_to_history(sender_id, user_text, "user")
-        
-        # 获取对话历史
+        # ✅ 关键修复：先获取对话历史（不包含当前消息）
         history = get_conversation_history(sender_id, limit=5)
         logger.info(f"📊 获取到 {len(history)} 条对话历史（sender_id={sender_id}）")
+        
+        # 再添加当前用户消息到历史
+        add_to_history(sender_id, user_text, "user")
         
         # ✅ 格式化历史用于Qoder API
         formatted_history = format_history_for_qoder(history)
         if formatted_history:
-            logger.info(f"✅ 形成化历史：{len(formatted_history)} 条 -> {formatted_history[:2]}...")  # 打印前2条
+            logger.info(f"✅ 格式化历史：{len(formatted_history)} 条 -> {formatted_history[:2]}...")  # 打印前2条
         
         # 调用Qoder智能体获取回复
         logger.info(f"用户消息：{user_text}")
