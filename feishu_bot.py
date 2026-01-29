@@ -170,7 +170,16 @@ def send_feishu_text_message(chat_id, text_content, msg_type="text", reply_to_me
     if not token:
         return False
     
-    url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
+    # ✅ 关键修复：如果有 reply_to_message_id，使用回复 API；否则使用普通发送 API
+    if reply_to_message_id:
+        # 使用专门的回复消息 API
+        url = f"https://open.feishu.cn/open-apis/im/v1/messages/{reply_to_message_id}/reply"
+        logger.info(f"✅ 使用回复 API: {url}")
+    else:
+        # 使用普通发送消息 API
+        url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
+        logger.info(f"📤 使用普通发送 API")
+    
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
@@ -184,23 +193,19 @@ def send_feishu_text_message(chat_id, text_content, msg_type="text", reply_to_me
     else:
         content = json.dumps({"text": text_content})
     
-    data = {
-        "receive_id": chat_id,
-        "content": content,
-        "msg_type": msg_type
-    }
-    
-    # ✅ 关键修复：使用飞书官方回复字段 root_id + reply_in_thread
+    # ✅ 关键修复：回复 API 不需要 receive_id，普通 API 需要
     if reply_to_message_id:
-        # 飞书官方文档：https://open.feishu.cn/document/server-docs/im-v1/message/create
-        # 回复消息需要同时设置：
-        # 1. root_id = 被回复消息的 message_id
-        # 2. reply_in_thread = false（不创建话题，直接回复）
-        data["root_id"] = reply_to_message_id
-        data["reply_in_thread"] = False
-        logger.info(f"✅ 已添加回复功能: root_id={reply_to_message_id}, reply_in_thread=False")
+        data = {
+            "content": content,
+            "msg_type": msg_type,
+            "uuid": f"reply_{int(time.time() * 1000)}"  # 请求去重标识
+        }
     else:
-        logger.warning(f"⚠️  未提供message_id，将使用普通发送模式")
+        data = {
+            "receive_id": chat_id,
+            "content": content,
+            "msg_type": msg_type
+        }
     
     # 打印完整请求数据用于调试
     logger.info(f"📤 发送请求: URL={url}")
