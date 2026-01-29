@@ -499,6 +499,9 @@ def feishu_callback():
         # 处理消息事件
         if event_data.get("header", {}).get("event_type") == "im.message.receive_v1":
             event_id = event_data.get("header", {}).get("event_id")
+            
+            # ⚠️ 调试日志：打印event_id用于追踪重复问题
+            logger.info(f"🔍 收到事件: event_id={event_id}")
                     
             # ⚠️ 检查事件是否已处理过（防止重复处理）
             if event_id and is_event_processed(event_id):
@@ -508,6 +511,7 @@ def feishu_callback():
             # 标记事件为已处理
             if event_id:
                 mark_event_processed(event_id)
+                logger.info(f"✅ 事件 {event_id} 标记为已处理（当前已处理事件数: {len(processed_events)}）")
                     
             event = event_data.get("event", {})
             message = event.get("message", {})
@@ -519,6 +523,9 @@ def feishu_callback():
             message_id = message.get("message_id")  # 添加message_id的获取
             create_time = message.get("create_time")  # 消息创建时间（毫秒）
             content = json.loads(message.get("content", "{}"))
+            
+            # ⚠️ 调试日志：打印message_id用于追踪重复问题
+            logger.info(f"🔍 收到消息: message_id={message_id}, chat_id={chat_id}")
             
             # ✅ 关键修复：正确获取用户ID（群聊场景优先使用 open_id）
             sender_id_obj = sender.get("sender_id", {})
@@ -540,12 +547,13 @@ def feishu_callback():
             
             # ⚠️ 重要：按message_id也进行去重（防止旧消息的重复）
             if message_id and message_id in processed_messages:
-                logger.warning(f"⚠️ 消息 {message_id} 已处理过，忽略伜旧消息")
+                logger.warning(f"⚠️ 消息 {message_id} 已处理过，忽略伜旧消息（当前已处理消息数: {len(processed_messages)}）")
                 return jsonify({"code": 0, "msg": "success"})
             
             # 标记消息为已处理
             if message_id:
                 processed_messages.add(message_id)
+                logger.info(f"✅ 消息 {message_id} 标记为已处理（当前已处理消息数: {len(processed_messages)}）")
             
             # ⚠️ 重要：立即返回200响应，防止飞书重试（这是导致重复的根本原因）
             # 必须在处理消息之前返回，避免超时
