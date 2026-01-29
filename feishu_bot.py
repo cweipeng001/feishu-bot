@@ -111,12 +111,14 @@ def process_message_async(chat_id, sender_id, user_text, message_id=None):
         # ✅ 调试日志：打印message_id
         logger.info(f"🔑 收到message_id: {message_id}")
         
-        # ✅ 方案3：从飞书API获取群聊历史（不使用内存）
-        history = get_feishu_chat_history(chat_id, limit=20)
-        logger.info(f"📊 从飞书获取到 {len(history)} 条对话历史（chat_id={chat_id}）")
+        # ✅ 关键修复：先将用户消息添加到历史记录
+        add_to_history(chat_id, user_text, role="user")
         
-        # ✅ 飞书API返回的格式已经是标准格式，直接使用
-        formatted_history = history  # {"role": "user/assistant", "content": "..."}
+        # ✅ 使用本地缓存的对话历史（因为飞书API权限不足）
+        history = get_conversation_history(chat_id, limit=10)
+        formatted_history = format_history_for_qoder(history)
+        logger.info(f"📊 从本地缓存获取到 {len(formatted_history)} 条对话历史（chat_id={chat_id}）")
+        
         if formatted_history:
             logger.info(f"✅ 格式化历史：{len(formatted_history)} 条 -> {formatted_history[-2:]}")  # 打印最后2条
         
@@ -124,6 +126,9 @@ def process_message_async(chat_id, sender_id, user_text, message_id=None):
         logger.info(f"用户消息：{user_text}")
         qoder_reply = get_qoder_reply(user_text, sender_id, chat_id, formatted_history)
         logger.info(f"Qoder回复：{qoder_reply}")
+        
+        # ✅ 将机器人回复也添加到历史记录
+        add_to_history(chat_id, qoder_reply, role="assistant")
         
         # ✅ 关键修复：使用回复功能，而非普通发送
         logger.info(f"📤 准备发送回复，reply_to_message_id={message_id}")
