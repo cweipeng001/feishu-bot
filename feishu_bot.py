@@ -190,15 +190,12 @@ def send_feishu_text_message(chat_id, text_content, msg_type="text", reply_to_me
         "msg_type": msg_type
     }
     
-    # ✅ 关键修复：使用飞书官方回复字段 reply_in_thread
+    # ✅ 关键修复：使用飞书官方回复字段 uuid
     if reply_to_message_id:
         # 飞书官方文档：https://open.feishu.cn/document/server-docs/im-v1/message/create
-        # 回复消息需要同时设置：
-        # 1. reply_in_thread = false（不创建话题，直接回复）
-        # 2. root_id = 被回复消息的message_id
-        data["reply_in_thread"] = False
-        data["root_id"] = reply_to_message_id
-        logger.info(f"✅ 已添加回复功能: root_id={reply_to_message_id}")
+        # 回复消息需要设置 uuid 字段（被回复消息的 message_id）
+        data["uuid"] = reply_to_message_id
+        logger.info(f"✅ 已添加回复功能: uuid={reply_to_message_id}")
     else:
         logger.warning(f"⚠️  未提供message_id，将使用普通发送模式")
     
@@ -208,8 +205,12 @@ def send_feishu_text_message(chat_id, text_content, msg_type="text", reply_to_me
     
     try:
         response = requests.post(url, headers=headers, json=data, timeout=10)
-        response.raise_for_status()
-        result = response.json()
+        result = response.json()  # 先解析JSON
+        
+        # ✅ 打印飞书API的完整响应（用于调试回复功能）
+        logger.info(f"📥 飞书API响应: code={result.get('code')}, msg={result.get('msg')}")
+        if result.get('code') != 0:
+            logger.error(f"❌ 飞书API返回错误: {json.dumps(result, ensure_ascii=False)}")
         
         if result.get("code") == 0:
             logger.info(f"成功发送消息到 {chat_id}")
