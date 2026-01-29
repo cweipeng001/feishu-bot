@@ -190,12 +190,15 @@ def send_feishu_text_message(chat_id, text_content, msg_type="text", reply_to_me
         "msg_type": msg_type
     }
     
-    # ✅ 关键修复：使用飞书官方回复字段 uuid
+    # ✅ 关键修复：使用飞书官方回复字段 root_id + reply_in_thread
     if reply_to_message_id:
         # 飞书官方文档：https://open.feishu.cn/document/server-docs/im-v1/message/create
-        # 回复消息需要设置 uuid 字段（被回复消息的 message_id）
-        data["uuid"] = reply_to_message_id
-        logger.info(f"✅ 已添加回复功能: uuid={reply_to_message_id}")
+        # 回复消息需要同时设置：
+        # 1. root_id = 被回复消息的 message_id
+        # 2. reply_in_thread = false（不创建话题，直接回复）
+        data["root_id"] = reply_to_message_id
+        data["reply_in_thread"] = False
+        logger.info(f"✅ 已添加回复功能: root_id={reply_to_message_id}, reply_in_thread=False")
     else:
         logger.warning(f"⚠️  未提供message_id，将使用普通发送模式")
     
