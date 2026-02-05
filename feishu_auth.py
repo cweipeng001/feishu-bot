@@ -79,7 +79,9 @@ class FeishuAuthManager:
             "app_id": self.app_id,
             "redirect_uri": self.redirect_uri,
             "response_type": "code",
-            "state": state
+            "state": state,
+            # 添加文档搜索权限
+            "scope": "search:docs:read wiki:wiki:readonly"
             # 注意：offline_access 需要应用启用网页能力，暂时不使用
             # token 过期后需重新授权（约2小时）
         }
