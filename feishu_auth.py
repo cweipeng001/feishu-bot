@@ -79,9 +79,9 @@ class FeishuAuthManager:
             "app_id": self.app_id,
             "redirect_uri": self.redirect_uri,
             "response_type": "code",
-            "state": state,
-            # 请求 offline_access 以获取 refresh_token
-            "scope": "offline_access"
+            "state": state
+            # 注意：offline_access 需要应用启用网页能力，暂时不使用
+            # token 过期后需重新授权（约2小时）
         }
         
         query_string = "&".join([f"{k}={v}" for k, v in params.items()])

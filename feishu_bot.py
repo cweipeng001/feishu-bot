@@ -14,7 +14,7 @@ from datetime import datetime
 from threading import Thread  # 用于异步处理
 from message_formatter import MessageFormatter
 from feishu_auth import get_auth_manager, is_user_authorized, get_user_access_token
-from feishu_docs import search_feishu_knowledge, get_docs_manager
+from feishu_docs_openapi import search_feishu_knowledge, get_docs_manager
 
 # 加载环境变量
 load_dotenv()
@@ -940,6 +940,38 @@ def test_doc_search():
             "status": "success",
             "query": query,
             "result": result
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route("/test/doc-fetch", methods=["POST"])
+def test_doc_fetch():
+    """测试飞书文档获取功能"""
+    data = request.get_json() or {}
+    url = data.get("url", "")
+    
+    if not url:
+        return jsonify({
+            "status": "error",
+            "message": "缺少文档URL参数"
+        }), 400
+    
+    if not is_user_authorized():
+        return jsonify({
+            "status": "error",
+            "message": "未授权，请先访问 /auth/feishu 完成 OAuth 授权"
+        }), 401
+    
+    try:
+        manager = get_docs_manager()
+        result = manager.get_document_content(url)
+        return jsonify({
+            "status": "success",
+            "url": url,
+            "result": result.content if result else "未找到文档内容"
         })
     except Exception as e:
         return jsonify({
