@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from collections import defaultdict
 from datetime import datetime
 from threading import Thread  # 用于异步处理
+from message_formatter import MessageFormatter
 
 # 加载环境变量
 load_dotenv()
@@ -33,6 +34,12 @@ FEISHU_CONFIG = {
 QODER_CONFIG = {
     "api_endpoint": os.getenv("QODER_API_ENDPOINT", "http://127.0.0.1:8081/api/chat"),  # 默认本地Qoder
     "api_key": os.getenv("QODER_API_KEY", "")
+}
+
+# 消息格式化配置
+FORMATTING_CONFIG = {
+    "enabled": os.getenv("MESSAGE_FORMATTING_ENABLED", "true").lower() == "true",
+    "mobile_optimized": os.getenv("MOBILE_OPTIMIZED", "false").lower() == "true"
 }
 
 # 千问AI配置（作为备用，当Qoder不可用时使用）
@@ -111,8 +118,11 @@ def process_message_async(chat_id, sender_id, user_text, message_id=None):
         # ✅ 调试日志：打印message_id
         logger.info(f"🔑 收到message_id: {message_id}")
         
-        # ✅ 关键修复：先将用户消息添加到历史记录
-        add_to_history(chat_id, user_text, role="user")
+        # ✅ 关键修复：先将预处理后的用户消息添加到历史记录
+        # 预处理用户消息（移除无效提及）
+        processed_user_text = MessageFormatter.preprocess_message(user_text)
+        logger.info(f"📝 消息预处理: '{user_text}' -> '{processed_user_text}'")
+        add_to_history(chat_id, processed_user_text, role="user")
         
         # ✅ 使用本地缓存的对话历史（因为飞书API权限不足）
         history = get_conversation_history(chat_id, limit=10)
@@ -124,8 +134,24 @@ def process_message_async(chat_id, sender_id, user_text, message_id=None):
         
         # 调用Qoder智能体获取回复
         logger.info(f"用户消息：{user_text}")
-        qoder_reply = get_qoder_reply(user_text, sender_id, chat_id, formatted_history)
-        logger.info(f"Qoder回复：{qoder_reply}")
+        logger.info(f"预处理后消息：{processed_user_text}")
+        qoder_reply = get_qoder_reply(processed_user_text, sender_id, chat_id, formatted_history)
+        
+        # ✅ 优化回复可读性（如果启用）
+        if qoder_reply and len(qoder_reply.strip()) > 0:
+            if FORMATTING_CONFIG["enabled"]:
+                formatter = MessageFormatter()
+                if FORMATTING_CONFIG["mobile_optimized"]:
+                    optimized_reply = formatter.format_for_mobile(qoder_reply)
+                else:
+                    optimized_reply = formatter.optimize_readability(qoder_reply)
+                logger.info(f"Qoder原始回复：{qoder_reply[:100]}...")
+                logger.info(f"优化后回复：{optimized_reply[:100]}...")
+                qoder_reply = optimized_reply
+            else:
+                logger.info(f"Qoder回复（未格式化）：{qoder_reply[:100]}...")
+        else:
+            logger.warning("Qoder返回空回复")
         
         # ✅ 将机器人回复也添加到历史记录
         add_to_history(chat_id, qoder_reply, role="assistant")
