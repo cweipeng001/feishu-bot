@@ -249,7 +249,25 @@ class FeishuAuthManager:
             raise
     
     def _load_token_from_storage(self):
-        """从存储加载 Token"""
+        """从存储加载 Token（优先从环境变量读取）"""
+        # 优先从环境变量读取（用于 Railway 等云平台部署）
+        env_token = os.getenv("FEISHU_USER_ACCESS_TOKEN")
+        env_refresh = os.getenv("FEISHU_USER_REFRESH_TOKEN")
+        
+        if env_token and env_refresh:
+            self._token_cache = {
+                "access_token": env_token,
+                "refresh_token": env_refresh,
+                "token_type": "Bearer",
+                "expires_in": 7200,
+                "refresh_expires_in": 2592000,
+                "scope": os.getenv("FEISHU_USER_TOKEN_SCOPE", "auth:user.id:read search:docs:read wiki:wiki:readonly"),
+                "obtained_at": int(os.getenv("FEISHU_USER_TOKEN_OBTAINED_AT", str(int(time.time()))))
+            }
+            logger.info("✅ 从环境变量加载 Token 成功（云平台部署模式）")
+            return
+        
+        # 否则从文件加载（本地开发模式）
         if self.storage_path.exists():
             try:
                 with open(self.storage_path, 'r', encoding='utf-8') as f:
