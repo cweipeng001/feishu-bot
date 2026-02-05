@@ -16,6 +16,10 @@ from message_formatter import MessageFormatter
 from feishu_auth import get_auth_manager, is_user_authorized, get_user_access_token
 from feishu_docs_openapi import search_feishu_knowledge, get_docs_manager
 
+# 导入 Skill 管理器
+from skill_manager import get_skill_manager, invoke_skill
+from skills.feishu_doc_search_skill import SKILL_METADATA
+
 # 加载环境变量
 load_dotenv()
 
@@ -71,6 +75,20 @@ MAX_PROCESSED_EVENTS = 1000  # 最多记录1000个事件ID
 
 # 用户白名单（空则允许所有用户）
 ALLOWED_USERS = set(os.getenv("ALLOWED_USERS", "").split(",")) if os.getenv("ALLOWED_USERS") else None
+
+# 初始化 Skill 管理器
+skill_manager = get_skill_manager()
+
+# 注册飞书文档搜索 Skill
+skill_manager.register_skill(
+    name=SKILL_METADATA["name"],
+    handler=SKILL_METADATA["handler"],
+    description=SKILL_METADATA["description"],
+    params_schema=SKILL_METADATA["params_schema"],
+    enabled=SKILL_METADATA["enabled"]
+)
+
+logger.info(f"✅ Skill 管理器初始化完成，已注册 {len(skill_manager.list_skills())} 个 Skills")
 
 # 辅助函数：检查事件是否已经处理过（防止重复事件）
 def is_event_processed(event_id):
@@ -200,6 +218,7 @@ def extract_search_query(user_text: str) -> str:
 def enhance_message_with_docs(user_text: str) -> tuple:
     """
     使用文档内容增强用户消息（RAG）
+    现在通过 Skill 调用
     
     Args:
         user_text: 原始用户消息
@@ -215,14 +234,23 @@ def enhance_message_with_docs(user_text: str) -> tuple:
     logger.info(f"📚 开始搜索飞书文档: '{search_query}'")
     
     try:
-        # 搜索文档
-        doc_context = search_feishu_knowledge(
-            search_query, 
+        # ✅ 使用 Skill 调用方式
+        logger.info(f"🎯 [Skill] 调用 feishu-doc-search")
+        result = invoke_skill(
+            "feishu-doc-search",
+            query=search_query,
             count=DOC_SEARCH_CONFIG["max_docs"]
         )
         
-        if "未找到" in doc_context or "未授权" in doc_context or "错误" in doc_context:
-            logger.info(f"📚 文档搜索无结果或出错")
+        # 检查调用结果
+        if not result or not result.get("success"):
+            logger.info(f"📚 文档搜索无结果或出错: {result.get('error', '未知错误')}")
+            return user_text, False
+        
+        doc_context = result.get("result", "")
+        
+        if not doc_context:
+            logger.info(f"📚 文档搜索返回空内容")
             return user_text, False
         
         # 构建增强后的消息
@@ -232,7 +260,7 @@ def enhance_message_with_docs(user_text: str) -> tuple:
 
 请根据以上检索到的飞书文档内容，结合你的知识，回答用户的问题。如果文档中没有相关信息，请告知用户。"""
         
-        logger.info(f"✅ 已用飞书文档增强用户消息 (文档内容长度: {len(doc_context)} 字符)")
+        logger.info(f"✅ 已用飞书文档增强用户消息 (文档内容长度: {len(doc_context)} 字符, 找到 {result.get('documents_found', 0)} 个文档)")
         return enhanced_message, True
         
     except Exception as e:
@@ -619,6 +647,24 @@ def get_simple_reply(user_message):
     # 基础的关键词回复
     message_lower = user_message.lower().strip()
     
+    # 检查是否包含文档检索内容（RAG增强后的消息）
+    if "用户问题:" in user_message and "📚 **检索到的飞书文档内容：**" in user_message:
+        # 提取原始问题
+        import re
+        match = re.search(r'用户问题: (.+?)\n', user_message)
+        original_question = match.group(1) if match else "您的问题"
+        
+        # 提取文档内容
+        doc_section = user_message.split("📚 **检索到的飞书文档内容：**")[1] if "📚 **检索到的飞书文档内容：**" in user_message else ""
+        
+        # 返回文档搜索结果
+        return f"""📚 已为您搜索到相关飞书文档：
+
+{doc_section}
+
+⚠️ 注意：AI智能体服务当前不可用，仅返回文档搜索结果。
+请点击文档链接查看完整内容，或稍后再试。"""
+    
     if any(word in message_lower for word in ['你好', 'hello', 'hi', '您好']):
         return "你好！我是飞书机器人助手。\n\n目前我处于简单回复模式。要启用完整的AI功能，请配置Qoder智能体服务。\n\n您可以：\n1. 设置环境变量 QODER_API_ENDPOINT\n2. 重启机器人服务"
     
@@ -973,6 +1019,64 @@ def test_doc_fetch():
             "url": url,
             "result": result.content if result else "未找到文档内容"
         })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route("/skills", methods=["GET"])
+def list_skills():
+    """列出所有已注册的 Skills"""
+    skills_info = []
+    for name, skill in skill_manager.list_skills().items():
+        skills_info.append({
+            "name": name,
+            "description": skill.description,
+            "enabled": skill.enabled,
+            "params_schema": skill.params_schema
+        })
+    
+    return jsonify({
+        "total": len(skills_info),
+        "skills": skills_info
+    })
+
+@app.route("/skills/<skill_name>", methods=["GET"])
+def get_skill_info(skill_name):
+    """获取指定 Skill 的详细信息"""
+    skill = skill_manager.get_skill(skill_name)
+    
+    if not skill:
+        return jsonify({
+            "status": "error",
+            "message": f"Skill '{skill_name}' 不存在"
+        }), 404
+    
+    return jsonify({
+        "name": skill.name,
+        "description": skill.description,
+        "enabled": skill.enabled,
+        "params_schema": skill.params_schema
+    })
+
+@app.route("/skills/<skill_name>/invoke", methods=["POST"])
+def invoke_skill_api(skill_name):
+    """调用指定的 Skill"""
+    data = request.get_json() or {}
+    params = data.get("params", {})
+    
+    try:
+        result = invoke_skill(skill_name, **params)
+        return jsonify({
+            "status": "success",
+            "result": result
+        })
+    except ValueError as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 404
     except Exception as e:
         return jsonify({
             "status": "error",
