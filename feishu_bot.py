@@ -3,7 +3,8 @@ import json
 import hashlib
 import hmac
 import base64
-from flask import Flask, request, jsonify
+import re
+from flask import Flask, request, jsonify, redirect
 import logging
 import os
 import time
@@ -12,6 +13,8 @@ from collections import defaultdict
 from datetime import datetime
 from threading import Thread  # 用于异步处理
 from message_formatter import MessageFormatter
+from feishu_auth import get_auth_manager, is_user_authorized, get_user_access_token
+from feishu_docs import search_feishu_knowledge, get_docs_manager
 
 # 加载环境变量
 load_dotenv()
@@ -39,7 +42,15 @@ QODER_CONFIG = {
 # 消息格式化配置
 FORMATTING_CONFIG = {
     "enabled": os.getenv("MESSAGE_FORMATTING_ENABLED", "true").lower() == "true",
-    "mobile_optimized": os.getenv("MOBILE_OPTIMIZED", "false").lower() == "true"
+    "mobile_optimized": os.getenv("MOBILE_OPTIMIZED", "false").lower() == "true"}
+
+# 飞书文档检索配置
+DOC_SEARCH_CONFIG = {
+    "enabled": os.getenv("FEISHU_DOC_SEARCH_ENABLED", "true").lower() == "true",
+    "auto_detect": os.getenv("FEISHU_DOC_AUTO_DETECT", "true").lower() == "true",  # 自动检测是否需要搜索
+    "max_docs": int(os.getenv("FEISHU_DOC_MAX_RESULTS", "3")),
+    # 触发文档搜索的关键词
+    "trigger_keywords": ["文档", "知识库", "wiki", "查一下", "搜索", "找一下", "帮我查", "资料", "教程", "说明", "手册"]
 }
 
 # 千问AI配置（作为备用，当Qoder不可用时使用）
@@ -111,6 +122,124 @@ def format_history_for_qoder(history):
         })
     return formatted
 
+# ============================================================
+# 飞书文档检索增强 (RAG) 功能
+# ============================================================
+
+def should_search_documents(user_text: str) -> bool:
+    """
+    判断用户消息是否需要触发文档搜索
+    
+    Args:
+        user_text: 用户消息文本
+        
+    Returns:
+        是否需要搜索文档
+    """
+    if not DOC_SEARCH_CONFIG["enabled"]:
+        return False
+    
+    if not DOC_SEARCH_CONFIG["auto_detect"]:
+        return False
+    
+    if not is_user_authorized():
+        logger.debug("文档搜索功能未授权，跳过检测")
+        return False
+    
+    text_lower = user_text.lower()
+    
+    # 检查是否包含触发关键词
+    for keyword in DOC_SEARCH_CONFIG["trigger_keywords"]:
+        if keyword.lower() in text_lower:
+            logger.info(f"🔍 检测到文档搜索关键词: '{keyword}'")
+            return True
+    
+    # 检查是否是询问类问题（可能需要查文档）
+    question_patterns = [
+        r"怎么.{0,10}(做|用|操作|配置|设置)",
+        r"如何.{0,10}(做|用|操作|配置|设置)",
+        r"什么是.+",
+        r".+是什么",
+        r".+(在哪|怎么找)",
+        r"有没有.+(文档|说明|教程)"
+    ]
+    
+    for pattern in question_patterns:
+        if re.search(pattern, text_lower):
+            logger.info(f"🔍 检测到可能需要文档的问题模式")
+            return True
+    
+    return False
+
+
+def extract_search_query(user_text: str) -> str:
+    """
+    从用户消息中提取搜索关键词
+    
+    Args:
+        user_text: 用户消息
+        
+    Returns:
+        搜索关键词
+    """
+    # 移除一些常见的前缀词
+    prefixes_to_remove = [
+        r"^(帮我|请|麻烦|能不能|可以|请帮我)(查一下|搜索|找一下|查|找|搜)",
+        r"^(查一下|搜索|找一下|查|找|搜)",
+        r"(的)?文档(在哪|呢|吗)?$",
+        r"(的)?资料(在哪|呢|吗)?$"
+    ]
+    
+    query = user_text.strip()
+    for pattern in prefixes_to_remove:
+        query = re.sub(pattern, "", query, flags=re.IGNORECASE)
+    
+    return query.strip() or user_text.strip()
+
+
+def enhance_message_with_docs(user_text: str) -> tuple:
+    """
+    使用文档内容增强用户消息（RAG）
+    
+    Args:
+        user_text: 原始用户消息
+        
+    Returns:
+        (增强后的消息, 是否使用了文档)
+    """
+    if not should_search_documents(user_text):
+        return user_text, False
+    
+    # 提取搜索关键词
+    search_query = extract_search_query(user_text)
+    logger.info(f"📚 开始搜索飞书文档: '{search_query}'")
+    
+    try:
+        # 搜索文档
+        doc_context = search_feishu_knowledge(
+            search_query, 
+            count=DOC_SEARCH_CONFIG["max_docs"]
+        )
+        
+        if "未找到" in doc_context or "未授权" in doc_context or "错误" in doc_context:
+            logger.info(f"📚 文档搜索无结果或出错")
+            return user_text, False
+        
+        # 构建增强后的消息
+        enhanced_message = f"""用户问题: {user_text}
+
+{doc_context}
+
+请根据以上检索到的飞书文档内容，结合你的知识，回答用户的问题。如果文档中没有相关信息，请告知用户。"""
+        
+        logger.info(f"✅ 已用飞书文档增强用户消息 (文档内容长度: {len(doc_context)} 字符)")
+        return enhanced_message, True
+        
+    except Exception as e:
+        logger.error(f"❌ 文档搜索失败: {e}")
+        return user_text, False
+
+
 # 异步处理消息（关键修复：防止飞书重试）
 def process_message_async(chat_id, sender_id, user_text, message_id=None):
     """在后台线程中处理消息"""
@@ -130,12 +259,17 @@ def process_message_async(chat_id, sender_id, user_text, message_id=None):
         logger.info(f"📊 从本地缓存获取到 {len(formatted_history)} 条对话历史（chat_id={chat_id}）")
         
         if formatted_history:
-            logger.info(f"✅ 格式化历史：{len(formatted_history)} 条 -> {formatted_history[-2:]}")  # 打印最后2条
+            logger.info(f"✅ 格式化历史：{len(formatted_history)} 条 -> {formatted_history[-2:]}")
+        
+        # ✅ 新增：飞书文档检索增强 (RAG)
+        enhanced_message, used_docs = enhance_message_with_docs(processed_user_text)
+        if used_docs:
+            logger.info(f"📚 RAG增强已启用，将使用文档内容辅助回答")
         
         # 调用Qoder智能体获取回复
         logger.info(f"用户消息：{user_text}")
         logger.info(f"预处理后消息：{processed_user_text}")
-        qoder_reply = get_qoder_reply(processed_user_text, sender_id, chat_id, formatted_history)
+        qoder_reply = get_qoder_reply(enhanced_message, sender_id, chat_id, formatted_history)
         
         # ✅ 优化回复可读性（如果启用）
         if qoder_reply and len(qoder_reply.strip()) > 0:
@@ -693,14 +827,125 @@ def get_stats():
     total_users = len(conversation_history)
     total_messages = sum(len(history) for history in conversation_history.values())
     
+    # 获取文档搜索授权状态
+    doc_search_status = {
+        "enabled": DOC_SEARCH_CONFIG["enabled"],
+        "authorized": is_user_authorized(),
+        "auto_detect": DOC_SEARCH_CONFIG["auto_detect"]
+    }
+    
     return jsonify({
         "total_users": total_users,
         "total_messages": total_messages,
         "active_users": list(conversation_history.keys())[:10],  # 最近10个活跃用户
         "qoder_endpoint": QODER_CONFIG.get("api_endpoint"),
         "permissions_enabled": ALLOWED_USERS is not None,
-        "processed_events_count": len(processed_events)
+        "processed_events_count": len(processed_events),
+        "doc_search": doc_search_status
     })
+
+# ============================================================
+# OAuth 授权相关接口
+# ============================================================
+
+# 11. 生成 OAuth 授权链接
+@app.route("/auth/feishu", methods=["GET"])
+def feishu_oauth_start():
+    """生成飞书 OAuth 授权链接"""
+    auth_manager = get_auth_manager()
+    auth_url = auth_manager.generate_auth_url()
+    
+    # 可以选择重定向到授权页面，或返回链接
+    redirect_param = request.args.get("redirect", "false")
+    if redirect_param.lower() == "true":
+        return redirect(auth_url)
+    else:
+        return jsonify({
+            "status": "success",
+            "auth_url": auth_url,
+            "message": "请在浏览器中访问 auth_url 完成授权"
+        })
+
+# 12. OAuth 回调处理
+@app.route("/auth/feishu/callback", methods=["GET"])
+def feishu_oauth_callback():
+    """处理飞书 OAuth 回调"""
+    code = request.args.get("code")
+    state = request.args.get("state")
+    
+    if not code:
+        return jsonify({
+            "status": "error",
+            "message": "缺少授权码 (code)"
+        }), 400
+    
+    logger.info(f"🔑 收到 OAuth 回调: code={code[:20]}..., state={state}")
+    
+    try:
+        auth_manager = get_auth_manager()
+        token_data = auth_manager.exchange_code_for_token(code)
+        
+        # 获取用户信息
+        user_info = auth_manager.get_user_info()
+        user_name = user_info.get("name", "未知") if user_info else "未知"
+        
+        return jsonify({
+            "status": "success",
+            "message": "✅ 授权成功！飞书文档检索功能已启用。",
+            "user_name": user_name,
+            "token_expires_in": token_data.get("expires_in", 0),
+            "refresh_expires_in": token_data.get("refresh_expires_in", 0)
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ OAuth 回调处理失败: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"授权失败: {str(e)}"
+        }), 500
+
+# 13. 查看授权状态
+@app.route("/auth/feishu/status", methods=["GET"])
+def feishu_auth_status():
+    """查看飞书 OAuth 授权状态"""
+    auth_manager = get_auth_manager()
+    status = auth_manager.get_token_status()
+    
+    if status["authorized"]:
+        # 尝试获取用户信息
+        user_info = auth_manager.get_user_info()
+        if user_info:
+            status["user_name"] = user_info.get("name", "未知")
+            status["user_open_id"] = user_info.get("open_id", "未知")
+    
+    return jsonify(status)
+
+# 14. 测试文档搜索
+@app.route("/test/doc-search", methods=["POST"])
+def test_doc_search():
+    """测试飞书文档搜索功能"""
+    data = request.get_json() or {}
+    query = data.get("query", "测试")
+    count = data.get("count", 3)
+    
+    if not is_user_authorized():
+        return jsonify({
+            "status": "error",
+            "message": "未授权，请先访问 /auth/feishu 完成 OAuth 授权"
+        }), 401
+    
+    try:
+        result = search_feishu_knowledge(query, count)
+        return jsonify({
+            "status": "success",
+            "query": query,
+            "result": result
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 if __name__ == "__main__":
     logger.info("=" * 50)
