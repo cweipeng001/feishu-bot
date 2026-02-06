@@ -247,7 +247,7 @@ class FeishuAuthManager:
         }
         
         try:
-            logger.debug(f"请求 app_access_token: app_id={self.app_id[:10]}...")
+            logger.debug(f"请求 app_access_token: app_id={self.app_id[:10] if self.app_id else 'None'}... app_secret={self.app_secret[:10] if self.app_secret else 'None'}...")
             response = requests.post(url, json=payload, timeout=10)
             response.raise_for_status()
             result = response.json()
@@ -284,7 +284,11 @@ class FeishuAuthManager:
                 "scope": os.getenv("FEISHU_USER_TOKEN_SCOPE", "auth:user.id:read search:docs:read wiki:wiki:readonly"),
                 "obtained_at": int(os.getenv("FEISHU_USER_TOKEN_OBTAINED_AT", str(int(time.time()))))
             }
-            logger.info("✅ 从环境变量加载 Token 成功（云平台部署模式）")
+            # 添加 App ID 和 Secret 的日志
+            app_id = os.getenv("FEISHU_APP_ID", "")
+            app_secret = os.getenv("FEISHU_APP_SECRET", "")
+            logger.info(f"✅ 从环境变量加载 Token 成功（云平台部署模式）")
+            logger.info(f"🔧 [Railway Debug] App ID: {app_id[:10] if app_id else 'None'}... App Secret: {app_secret[:10] if app_secret else 'None'}...")
             return
         
         # 否则从文件加载（本地开发模式）
