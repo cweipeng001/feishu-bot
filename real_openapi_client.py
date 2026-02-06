@@ -45,7 +45,10 @@ class RealFeishuOpenAPIClient:
             try:
                 logger.info("🚀 启动 OpenAPI MCP 进程...")
                 
-                # 构建命令
+                # 构建命令（增加内存限制）
+                env = os.environ.copy()
+                env["NODE_OPTIONS"] = "--max-old-space-size=512"  # 限制 Node.js 内存为 512MB
+                
                 cmd = [
                     "npx", "-y", "@larksuiteoapi/lark-mcp",
                     "mcp",
@@ -62,7 +65,8 @@ class RealFeishuOpenAPIClient:
                     stderr=subprocess.PIPE,
                     text=True,
                     bufsize=1,
-                    universal_newlines=True
+                    universal_newlines=True,
+                    env=env  # 传入修改后的环境变量
                 )
                 
                 logger.info("✅ OpenAPI MCP 进程启动成功")
