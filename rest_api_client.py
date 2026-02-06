@@ -60,8 +60,8 @@ def search_feishu_docs_rest(query: str, count: int = 3) -> str:
         return "❌ 未授权。请先完成 OAuth 授权。"
     
     # 调用飞书搜索 API
-    # 使用 wiki.v1.nodes 接口搜索知识库文档
-    url = "https://open.feishu.cn/open-apis/wiki/v1/nodes/search"
+    # 使用 docx 文档搜索接口
+    url = "https://open.feishu.cn/open-apis/docx/v1/documents/search"
     
     headers = {
         "Authorization": f"Bearer {user_token}",
