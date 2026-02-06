@@ -1,0 +1,39 @@
+name: Sync Feishu Token to Railway
+
+on:
+  workflow_dispatch:  # 手动触发
+    inputs:
+      access_token:
+        description: 'FEISHU_USER_ACCESS_TOKEN'
+        required: true
+      refresh_token:
+        description: 'FEISHU_USER_REFRESH_TOKEN'
+        required: true
+      token_scope:
+        description: 'FEISHU_USER_TOKEN_SCOPE'
+        required: true
+        default: 'auth:user.id:read search:docs:read wiki:wiki:readonly'
+      obtained_at:
+        description: 'FEISHU_USER_TOKEN_OBTAINED_AT (Unix timestamp)'
+        required: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+      
+      - name: Sync to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway variables --set "FEISHU_USER_ACCESS_TOKEN=${{ github.event.inputs.access_token }}"
+          railway variables --set "FEISHU_USER_REFRESH_TOKEN=${{ github.event.inputs.refresh_token }}"
+          railway variables --set "FEISHU_USER_TOKEN_SCOPE=${{ github.event.inputs.token_scope }}"
+          railway variables --set "FEISHU_USER_TOKEN_OBTAINED_AT=${{ github.event.inputs.obtained_at }}"
+      
+      - name: Summary
+        run: |
+          echo "✅ Token 同步成功"
+          echo "⚠️  Railway 将自动重新部署，请等待 2-3 分钟"
