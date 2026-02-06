@@ -13,6 +13,44 @@ from feishu_auth import get_user_access_token
 
 logger = logging.getLogger(__name__)
 
+
+def optimize_search_query(query: str) -> str:
+    """
+    优化搜索关键词，提高搜索命中率
+    
+    Args:
+        query: 原始搜索关键词
+        
+    Returns:
+        优化后的搜索关键词
+    """
+    # 移除常见的搜索前缀
+    prefixes = ["搜索", "查找", "查询", "帮我查", "找一下"]
+    optimized = query.lower().strip()
+    
+    for prefix in prefixes:
+        if optimized.startswith(prefix):
+            optimized = optimized[len(prefix):].strip()
+            break
+    
+    # 添加相关的同义词和扩展词
+    synonyms_map = {
+        "入库": ["入库", "进货", "采购", "仓储"],
+        "文档": ["文档", "文件", "资料", "记录", "报告"],
+        "项目": ["项目", "工程", "任务", "计划"],
+        "技术": ["技术", "科技", "开发", "研发"],
+        "产品": ["产品", "商品", "服务", "解决方案"]
+    }
+    
+    # 如果查询词较短，尝试扩展
+    if len(optimized) <= 4:
+        for key, synonyms in synonyms_map.items():
+            if key in optimized:
+                # 返回多个可能的搜索词
+                return " OR ".join(synonyms)
+    
+    return optimized
+
 FEISHU_APP_ID = os.getenv("FEISHU_APP_ID", "")
 FEISHU_APP_SECRET = os.getenv("FEISHU_APP_SECRET", "")
 
@@ -53,6 +91,10 @@ def search_feishu_docs_rest(query: str, count: int = 3) -> str:
     """
     logger.info(f"🔍 [REST API] 搜索飞书文档: '{query}'")
     
+    # 优化搜索关键词
+    optimized_query = optimize_search_query(query)
+    logger.info(f"🔍 [REST API] 原始搜索: '{query}' -> 优化后: '{optimized_query}'")
+    
     # 获取用户 access_token
     user_token = get_user_access_token()
     if not user_token:
@@ -76,7 +118,7 @@ def search_feishu_docs_rest(query: str, count: int = 3) -> str:
     
     # POST 请求体 - 飞书 Drive API 正确参数格式
     payload = {
-        "search_key": query,
+        "search_key": optimized_query,
         "count": count,
         "offset": 0
         # 移除 docs_types 参数，让 API 使用默认值以避免验证错误
