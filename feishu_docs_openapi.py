@@ -19,14 +19,22 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # 尝试导入真实客户端，如果失败则回退到简单客户端
+# 优先使用 REST API 方式（不需要 Node.js，解决 Railway 内存问题）
 try:
-    from real_openapi_client import search_feishu_knowledge_real
+    from rest_api_client import search_feishu_knowledge_real
     HAS_REAL_CLIENT = True
-    logger.info("✅ 使用真实 OpenAPI 客户端")
-except ImportError:
-    HAS_REAL_CLIENT = False
-    logger.warning("⚠️  无法导入真实 OpenAPI 客户端，使用简单客户端")
-    from simple_openapi_client import search_feishu_knowledge_simple
+    logger.info("✅ 使用 REST API 客户端（无 Node.js 内存占用）")
+except ImportError as e:
+    logger.warning(f"⚠️  无法导入 REST API 客户端: {e}")
+    # 尝试使用旧的 MCP 客户端
+    try:
+        from real_openapi_client import search_feishu_knowledge_real
+        HAS_REAL_CLIENT = True
+        logger.info("✅ 使用 OpenAPI MCP 客户端")
+    except ImportError:
+        HAS_REAL_CLIENT = False
+        logger.warning("⚠️  无法导入 OpenAPI 客户端，使用简单客户端")
+        from simple_openapi_client import search_feishu_knowledge_simple
 
 # 默认配置
 DEFAULT_SEARCH_COUNT = 3
