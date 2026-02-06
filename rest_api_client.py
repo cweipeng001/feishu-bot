@@ -59,23 +59,21 @@ def search_feishu_docs_rest(query: str, count: int = 3) -> str:
         logger.error("❌ 未获取到用户 access_token")
         return "❌ 未授权。请先完成 OAuth 授权。"
     
-    # 调用飞书搜索 API
-    # 使用 suite/docs-api/search/object 接口 (POST 请求)
-    url = "https://open.feishu.cn/open-apis/suite/docs-api/search/object"
+    # 使用新版 Drive API 搜索文档
+    # 参考: https://open.feishu.cn/document/server-docs/docs/drive-v1/search/document-search
+    url = "https://open.feishu.cn/open-apis/drive/v1/files/search"
     
     headers = {
         "Authorization": f"Bearer {user_token}",
         "Content-Type": "application/json"
     }
     
-    # POST 请求体
+    # POST 请求体 - 新版 API 格式
     payload = {
         "search_key": query,
         "count": count,
         "offset": 0,
-        "owner_ids": [],
-        "chat_ids": [],
-        "docs_types": ["docx", "doc", "sheet", "bitable", "wiki"]
+        "docs_types": ["docx", "doc", "sheet", "bitable"]
     }
     
     try:
@@ -103,8 +101,8 @@ def search_feishu_docs_rest(query: str, count: int = 3) -> str:
             return f"❌ 搜索文档失败: {error_msg}"
         
         data = result.get("data", {})
-        # suite/docs-api/search/object 返回的是 docs_entities
-        docs = data.get("docs_entities", []) or data.get("docs", [])
+        # drive/v1/files/search 返回的是 files 或 docs_entities
+        docs = data.get("files", []) or data.get("docs_entities", []) or data.get("docs", [])
         
         if not docs:
             logger.info(f"ℹ️  未找到与 '{query}' 相关的文档")
@@ -114,17 +112,18 @@ def search_feishu_docs_rest(query: str, count: int = 3) -> str:
         formatted_parts = [f"📚 **检索到的飞书文档内容：**\n\n找到 {len(docs)} 个相关文档：\n"]
         
         for i, doc in enumerate(docs, 1):
-            # 适配不同的字段名称
-            title = doc.get("title", "") or doc.get("docs_token", "无标题")
-            doc_type = doc.get("docs_type", "") or doc.get("doc_type", "docx")
-            url = doc.get("url", "") or f"https://k7ftx11633c.feishu.cn/{doc_type}/{doc.get('docs_token', '')}"
+            # 适配不同 API 的字段名称
+            title = doc.get("title", "") or doc.get("name", "") or doc.get("docs_token", "无标题")
+            doc_type = doc.get("type", "") or doc.get("docs_type", "") or doc.get("doc_type", "docx")
+            doc_token = doc.get("token", "") or doc.get("docs_token", "")
+            doc_url = doc.get("url", "") or f"https://k7ftx11633c.feishu.cn/{doc_type}/{doc_token}"
             owner_name = doc.get("owner", {}).get("name", "") if isinstance(doc.get("owner"), dict) else doc.get("owner_name", "")
             
             part = f"""
 ---
 ### 📄 文档 {i}: {title}
 - 类型: {doc_type}
-- 链接: {url}
+- 链接: {doc_url}
 - 作者: {owner_name}
 """
             formatted_parts.append(part)
