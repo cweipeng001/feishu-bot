@@ -78,8 +78,8 @@ def search_feishu_docs_rest(query: str, count: int = 3) -> str:
     payload = {
         "search_key": query,
         "count": count,
-        "offset": 0,
-        "docs_types": ["docx", "doc", "sheet", "bitable"]
+        "offset": 0
+        # 移除 docs_types 参数，让 API 使用默认值以避免验证错误
     }
     
     # 如果有用户ID，添加到请求中

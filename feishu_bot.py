@@ -14,7 +14,9 @@ from datetime import datetime
 from threading import Thread  # 用于异步处理
 from message_formatter import MessageFormatter
 from feishu_auth import get_auth_manager, is_user_authorized, get_user_access_token
-from feishu_docs_openapi import search_feishu_knowledge, get_docs_manager
+from doc_search_strategy import search_documents_adaptive, get_strategy_info
+from smart_doc_search import should_search_documents_smart
+from hybrid_bot_manager import get_bot_manager, start_hybrid_bot, stop_hybrid_bot
 
 # 导入 Skill 管理器
 from skill_manager import get_skill_manager, invoke_skill
@@ -226,12 +228,24 @@ def enhance_message_with_docs(user_text: str) -> tuple:
     Returns:
         (增强后的消息, 是否使用了文档)
     """
-    if not should_search_documents(user_text):
+    # 使用智能分析判断是否需要搜索
+    should_search, confidence, reason, extracted_query = should_search_documents_smart(user_text)
+    
+    logger.info(f"🤖 智能分析结果: should_search={should_search}, confidence={confidence:.2f}, reason='{reason}'")
+    
+    # 如果置信度太低，不进行搜索
+    if not should_search or confidence < 0.3:
+        logger.debug(f"📝 智能判断无需文档搜索: {reason}")
         return user_text, False
     
-    # 提取搜索关键词
-    search_query = extract_search_query(user_text)
-    logger.info(f"📚 开始搜索飞书文档: '{search_query}'")
+    # 置信度警告
+    if confidence < 0.6:
+        logger.info(f"⚠️ 低置信度搜索 ({confidence:.2f}): {reason}")
+    
+    # 使用提取的查询词或原消息
+    search_query = extracted_query if extracted_query.strip() else user_text
+    
+    logger.info(f"📚 智能触发搜索飞书文档: '{search_query}' (置信度: {confidence:.2f})")
     
     try:
         # ✅ 使用 Skill 调用方式
@@ -260,7 +274,7 @@ def enhance_message_with_docs(user_text: str) -> tuple:
 
 请根据以上检索到的飞书文档内容，结合你的知识，回答用户的问题。如果文档中没有相关信息，请告知用户。"""
         
-        logger.info(f"✅ 已用飞书文档增强用户消息 (文档内容长度: {len(doc_context)} 字符, 找到 {result.get('documents_found', 0)} 个文档)")
+        logger.info(f"✅ 已用飞书文档增强用户消息 (文档内容长度: {len(doc_context)} 字符, 找到 {result.get('documents_found', 0)} 个文档, 置信度: {confidence:.2f})")
         return enhanced_message, True
         
     except Exception as e:
@@ -981,11 +995,12 @@ def test_doc_search():
         }), 401
     
     try:
-        result = search_feishu_knowledge(query, count)
+        result = search_documents_adaptive(query, count)
         return jsonify({
             "status": "success",
             "query": query,
-            "result": result
+            "result": result,
+            "strategy": get_strategy_info()["current_strategy"]
         })
     except Exception as e:
         return jsonify({
@@ -1083,14 +1098,112 @@ def invoke_skill_api(skill_name):
             "message": str(e)
         }), 500
 
+@app.route("/strategies", methods=["GET"])
+def get_search_strategies():
+    """获取文档搜索策略信息"""
+    return jsonify(get_strategy_info())
+
+@app.route("/strategies/switch", methods=["POST"])
+def switch_search_strategy_api():
+    """切换文档搜索策略"""
+    data = request.get_json() or {}
+    strategy_name = data.get("strategy")
+    
+    if not strategy_name:
+        return jsonify({
+            "status": "error",
+            "message": "请提供 strategy 参数"
+        }), 400
+    
+    try:
+        from doc_search_strategy import DocSearchStrategy, switch_search_strategy
+        strategy = DocSearchStrategy(strategy_name.lower())
+        
+        if switch_search_strategy(strategy):
+            return jsonify({
+                "status": "success",
+                "message": f"已切换到 {strategy_name} 策略",
+                "current_strategy": get_strategy_info()["current_strategy"]
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": f"无法切换到 {strategy_name} 策略"
+            }), 400
+            
+    except ValueError:
+        return jsonify({
+            "status": "error",
+            "message": f"无效的策略名称: {strategy_name}"
+        }), 400
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route("/hybrid/status", methods=["GET"])
+def get_hybrid_status():
+    """获取混合模式运行状态"""
+    bot_manager = get_bot_manager()
+    return jsonify(bot_manager.get_status())
+
+@app.route("/hybrid/switch", methods=["POST"])
+def switch_hybrid_mode():
+    """切换混合运行模式"""
+    data = request.get_json() or {}
+    mode_name = data.get("mode")
+    
+    if not mode_name:
+        return jsonify({
+            "status": "error",
+            "message": "请提供 mode 参数"
+        }), 400
+    
+    try:
+        bot_manager = get_bot_manager()
+        if bot_manager.switch_mode(mode_name):
+            return jsonify({
+                "status": "success",
+                "message": f"已切换到 {mode_name} 模式",
+                "current_status": bot_manager.get_status()
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": f"无法切换到 {mode_name} 模式"
+            }), 400
+            
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 if __name__ == "__main__":
     logger.info("=" * 50)
     logger.info("飞书机器人服务启动中...")
     logger.info("=" * 50)
     
+    # 初始化混合模式管理器
+    logger.info("🔄 初始化混合模式管理器...")
+    bot_manager = start_hybrid_bot()
+    status = bot_manager.get_status()
+    logger.info(f"🎯 当前运行模式: {status['current_mode']} ({status['mode_description']})")
+    logger.info(f"🔌 MCP 数据源: {status['mcp_source']}")
+    
     # 从环境变量获取端口
     port = int(os.getenv("SERVER_PORT", "5004"))
     logger.info(f"服务将在端口 {port} 启动")
     
-    # 启动Flask应用
-    app.run(host="0.0.0.0", port=port, debug=False)
+    try:
+        # 启动Flask应用
+        app.run(host="0.0.0.0", port=port, debug=False)
+    except KeyboardInterrupt:
+        logger.info("\n🛑 收到中断信号，正在优雅关闭...")
+    except Exception as e:
+        logger.error(f"❌ 服务运行异常: {e}")
+    finally:
+        # 清理资源
+        stop_hybrid_bot()
+        logger.info("👋 服务已停止")
