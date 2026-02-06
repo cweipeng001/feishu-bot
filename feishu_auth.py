@@ -143,7 +143,7 @@ class FeishuAuthManager:
     def get_valid_user_token(self) -> Optional[str]:
         """
         获取有效的 user_access_token
-        如果 Token 即将过期，自动刷新
+        如果 Token 即将过期，尝试刷新，失败时仍使用现有 token
         
         Returns:
             有效的 user_access_token，如果没有则返回 None
@@ -156,8 +156,8 @@ class FeishuAuthManager:
         if self._is_token_expiring_soon():
             logger.info("🔄 Token 即将过期，正在刷新...")
             if not self._refresh_token():
-                logger.error("❌ Token 刷新失败")
-                return None
+                logger.warning("⚠️ Token 刷新失败，使用现有 token (可能存在风险)")
+                # 继续使用现有 token
         
         return self._token_cache.get("access_token")
     
