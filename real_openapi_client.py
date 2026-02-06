@@ -154,6 +154,22 @@ class RealFeishuOpenAPIClient:
         if result:
             logger.info(f"✅ MCP 初始化成功: {result}")
             return True
+        
+        # 读取 stderr 获取详细错误信息
+        if self.process and self.process.stderr:
+            try:
+                import select
+                # 非阻塞读取 stderr
+                if hasattr(select, 'select'):
+                    ready, _, _ = select.select([self.process.stderr], [], [], 0.1)
+                    if ready:
+                        error_output = self.process.stderr.read()
+                        if error_output:
+                            logger.error(f"❌ MCP 进程错误输出: {error_output}")
+            except Exception as e:
+                logger.warning(f"无法读取 stderr: {e}")
+        
+        logger.error("❌ MCP 初始化失败")
         return False
     
     def list_tools(self) -> Optional[List[Dict]]:
