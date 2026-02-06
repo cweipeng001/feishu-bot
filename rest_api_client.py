@@ -133,7 +133,13 @@ def search_feishu_docs_rest(query: str, count: int = 3) -> str:
         
         # 调试：记录原始响应
         logger.debug(f"响应状态码: {response.status_code}")
-        logger.debug(f"响应内容: {response.text[:500]}")
+        logger.debug(f"响应内容: {response.text[:1000]}")
+        
+        # 特别记录搜索相关的调试信息
+        logger.info(f"🔍 [调试] 搜索请求详情:")
+        logger.info(f"   URL: {url}")
+        logger.info(f"   Headers: {{'Authorization': 'Bearer ***{user_token[-10:] if user_token else 'None'}', 'Content-Type': 'application/json'}}")
+        logger.info(f"   Payload: {payload}")
         
         # 检查响应状态码
         if response.status_code != 200:
@@ -155,6 +161,14 @@ def search_feishu_docs_rest(query: str, count: int = 3) -> str:
         data = result.get("data", {})
         # drive/v1/files/search 返回的是 files 或 docs_entities
         docs = data.get("files", []) or data.get("docs_entities", []) or data.get("docs", [])
+        
+        # 详细记录搜索结果
+        logger.info(f"🔍 [调试] 搜索结果分析:")
+        logger.info(f"   原始数据结构: {list(data.keys()) if isinstance(data, dict) else '非字典类型'}")
+        logger.info(f"   files 字段: {len(data.get('files', []))} 项")
+        logger.info(f"   docs_entities 字段: {len(data.get('docs_entities', []))} 项")
+        logger.info(f"   docs 字段: {len(data.get('docs', []))} 项")
+        logger.info(f"   最终匹配文档数: {len(docs)} 项")
         
         if not docs:
             logger.info(f"ℹ️  未找到与 '{query}' 相关的文档")
