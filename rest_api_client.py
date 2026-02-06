@@ -60,21 +60,26 @@ def search_feishu_docs_rest(query: str, count: int = 3) -> str:
         return "❌ 未授权。请先完成 OAuth 授权。"
     
     # 调用飞书搜索 API
-    # 使用 docx 文档搜索接口
-    url = "https://open.feishu.cn/open-apis/docx/v1/documents/search"
+    # 使用 suite/docs-api/search/object 接口 (POST 请求)
+    url = "https://open.feishu.cn/open-apis/suite/docs-api/search/object"
     
     headers = {
         "Authorization": f"Bearer {user_token}",
         "Content-Type": "application/json"
     }
     
-    params = {
-        "query": query,
-        "page_size": count
+    # POST 请求体
+    payload = {
+        "search_key": query,
+        "count": count,
+        "offset": 0,
+        "owner_ids": [],
+        "chat_ids": [],
+        "docs_types": ["docx", "doc", "sheet", "bitable", "wiki"]
     }
     
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=15)
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
         
         # 调试：记录原始响应
         logger.debug(f"响应状态码: {response.status_code}")
@@ -98,7 +103,8 @@ def search_feishu_docs_rest(query: str, count: int = 3) -> str:
             return f"❌ 搜索文档失败: {error_msg}"
         
         data = result.get("data", {})
-        docs = data.get("docs", [])
+        # suite/docs-api/search/object 返回的是 docs_entities
+        docs = data.get("docs_entities", []) or data.get("docs", [])
         
         if not docs:
             logger.info(f"ℹ️  未找到与 '{query}' 相关的文档")
@@ -108,10 +114,11 @@ def search_feishu_docs_rest(query: str, count: int = 3) -> str:
         formatted_parts = [f"📚 **检索到的飞书文档内容：**\n\n找到 {len(docs)} 个相关文档：\n"]
         
         for i, doc in enumerate(docs, 1):
-            title = doc.get("title", "无标题")
-            doc_type = doc.get("doc_type", "docx")
-            url = doc.get("url", "")
-            owner_name = doc.get("owner_name", "")
+            # 适配不同的字段名称
+            title = doc.get("title", "") or doc.get("docs_token", "无标题")
+            doc_type = doc.get("docs_type", "") or doc.get("doc_type", "docx")
+            url = doc.get("url", "") or f"https://k7ftx11633c.feishu.cn/{doc_type}/{doc.get('docs_token', '')}"
+            owner_name = doc.get("owner", {}).get("name", "") if isinstance(doc.get("owner"), dict) else doc.get("owner_name", "")
             
             part = f"""
 ---
