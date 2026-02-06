@@ -68,6 +68,12 @@ def search_feishu_docs_rest(query: str, count: int = 3) -> str:
         "Content-Type": "application/json"
     }
     
+    # 获取用户信息用于搜索
+    from feishu_auth import get_auth_manager
+    auth_manager = get_auth_manager()
+    user_info = auth_manager.get_user_info()
+    user_id = user_info.get('open_id') if user_info else None
+    
     # POST 请求体 - 飞书 Drive API 正确参数格式
     payload = {
         "search_key": query,
@@ -75,6 +81,10 @@ def search_feishu_docs_rest(query: str, count: int = 3) -> str:
         "offset": 0,
         "docs_types": ["docx", "doc", "sheet", "bitable"]
     }
+    
+    # 如果有用户ID，添加到请求中
+    if user_id:
+        payload["user_id"] = user_id
     
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=15)
