@@ -68,12 +68,12 @@ def search_feishu_docs_rest(query: str, count: int = 3) -> str:
         "Content-Type": "application/json"
     }
     
-    # POST 请求体 - 正确的 API 参数格式
+    # POST 请求体 - 飞书 Drive API 正确参数格式
     payload = {
-        "query": query,
+        "search_key": query,
         "count": count,
         "offset": 0,
-        "doc_types": ["docx", "doc", "sheet", "bitable"]
+        "docs_types": ["docx", "doc", "sheet", "bitable"]
     }
     
     try:
