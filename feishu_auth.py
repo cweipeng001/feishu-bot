@@ -190,7 +190,14 @@ class FeishuAuthManager:
             return False
         
         # 获取 app_access_token
-        app_token = self._get_app_access_token()
+        try:
+            app_token = self._get_app_access_token()
+            if not app_token:
+                logger.error("❌ 获取 app_access_token 失败，无法刷新用户 Token")
+                return False
+        except Exception as e:
+            logger.error(f"❌ 获取 app_access_token 异常: {e}")
+            return False
         
         headers = {
             "Content-Type": "application/json",
@@ -203,13 +210,18 @@ class FeishuAuthManager:
         }
         
         try:
+            logger.debug(f"正在刷新 Token: refresh_token={refresh_token[:10]}...")
             response = requests.post(FEISHU_REFRESH_URL, json=payload, headers=headers, timeout=10)
             response.raise_for_status()
             result = response.json()
             
+            logger.debug(f"刷新 Token 响应: code={result.get('code')}, msg={result.get('msg')}")
+            
             if result.get("code") != 0:
                 error_msg = result.get("msg", "未知错误")
-                logger.error(f"刷新 Token 失败: {error_msg}")
+                error_code = result.get("code", "未知code")
+                logger.error(f"刷新 Token 失败: code={error_code}, msg={error_msg}")
+                logger.error(f"完整响应: {result}")
                 return False
             
             token_data = result.get("data", {})
@@ -235,18 +247,24 @@ class FeishuAuthManager:
         }
         
         try:
+            logger.debug(f"请求 app_access_token: app_id={self.app_id[:10]}...")
             response = requests.post(url, json=payload, timeout=10)
             response.raise_for_status()
             result = response.json()
             
+            logger.debug(f"app_access_token 响应: code={result.get('code')}")
+            
             if result.get("code") != 0:
-                raise Exception(f"获取 app_access_token 失败: {result.get('msg')}")
+                error_msg = result.get("msg", "未知错误")
+                logger.error(f"获取 app_access_token 失败: code={result.get('code')}, msg={error_msg}")
+                logger.error(f"完整响应: {result}")
+                return ""
             
             return result.get("app_access_token", "")
             
         except requests.exceptions.RequestException as e:
-            logger.error(f"获取 app_access_token 失败: {e}")
-            raise
+            logger.error(f"获取 app_access_token 请求失败: {e}")
+            return ""
     
     def _load_token_from_storage(self):
         """从存储加载 Token（优先从环境变量读取）"""
