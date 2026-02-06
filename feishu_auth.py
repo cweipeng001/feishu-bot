@@ -268,9 +268,11 @@ class FeishuAuthManager:
     
     def _load_token_from_storage(self):
         """从存储加载 Token（优先从环境变量读取）"""
+        logger.info("🔧 [Railway Debug] 开始加载 Token...")
         # 优先从环境变量读取（用于 Railway 等云平台部署）
         env_token = os.getenv("FEISHU_USER_ACCESS_TOKEN")
         env_refresh = os.getenv("FEISHU_USER_REFRESH_TOKEN")
+        logger.info(f"🔧 [Railway Debug] 环境变量读取: token={env_token[:20] if env_token else 'None'}..., refresh={env_refresh[:20] if env_refresh else 'None'}...")
         
         if env_token and env_refresh:
             self._token_cache = {
