@@ -74,7 +74,22 @@ def search_feishu_docs_rest(query: str, count: int = 3) -> str:
     
     try:
         response = requests.get(url, headers=headers, params=params, timeout=15)
-        result = response.json()
+        
+        # 调试：记录原始响应
+        logger.debug(f"响应状态码: {response.status_code}")
+        logger.debug(f"响应内容: {response.text[:500]}")
+        
+        # 检查响应状态码
+        if response.status_code != 200:
+            logger.error(f"❌ HTTP 错误: {response.status_code}, 内容: {response.text[:200]}")
+            return f"❌ 搜索文档失败: HTTP {response.status_code}"
+        
+        # 尝试解析 JSON
+        try:
+            result = response.json()
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ JSON 解析失败: {e}, 响应内容: {response.text[:200]}")
+            return f"❌ 搜索文档失败: 响应格式错误"
         
         if result.get("code") != 0:
             error_msg = result.get("msg", "未知错误")
